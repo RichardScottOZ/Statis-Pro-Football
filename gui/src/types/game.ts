@@ -16,6 +16,8 @@ export interface GameState {
   distance: number;
   score: Score;
   is_over: boolean;
+  timeouts_home: number;
+  timeouts_away: number;
   last_plays: string[];
 }
 
@@ -61,6 +63,7 @@ export interface PlayerCard {
   number: number;
   team: string;
   overall_grade: string;
+  receiver_letter?: string;
   fg_chart?: FGChart;
   xp_rate?: number;
   avg_distance?: number;
@@ -85,7 +88,34 @@ export interface TeamData {
 
 export type GamePhase = 'setup' | 'playing' | 'gameover';
 
+export type GameMode = 'human_home' | 'human_away' | 'solitaire';
+
 export interface GameSession {
   game_id: string;
   state: GameState;
+}
+
+export interface PlayerBrief {
+  name: string;
+  position: string;
+  number: number;
+  overall_grade: string;
+  receiver_letter: string;
+}
+
+export interface PersonnelData {
+  possession: string;
+  offense_team: string;
+  defense_team: string;
+  offense_starters: Record<string, PlayerBrief>;
+  offense_receivers: PlayerBrief[];
+  defense_players: PlayerBrief[];
+  offense_all: PlayerBrief[];
+  defense_all: PlayerBrief[];
+}
+
+export interface HumanPlayCall {
+  play_type: string;
+  direction: string;
+  formation: string;
 }

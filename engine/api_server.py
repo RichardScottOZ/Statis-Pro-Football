@@ -1,16 +1,17 @@
 """FastAPI server for Statis Pro Football engine."""
 import os
 import random
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from .game import Game, GameState
 from .team import Team, list_available_teams
 from .fast_action_dice import FastActionDice, roll as dice_roll
-from .solitaire import SolitaireAI, GameSituation
+from .solitaire import SolitaireAI, GameSituation, PlayCall
 from .card_generator import CardGenerator
 
 app = FastAPI(
@@ -41,6 +42,18 @@ class NewGameRequest(BaseModel):
     season: int = 2025
     solitaire_home: bool = True
     solitaire_away: bool = True
+
+
+class HumanPlayCallRequest(BaseModel):
+    play_type: str  # RUN, SHORT_PASS, LONG_PASS, QUICK_PASS, SCREEN, PUNT, FG, KNEEL
+    direction: str = "MIDDLE"  # LEFT, RIGHT, MIDDLE, IL, IR, SL, SR, DEEP_LEFT, DEEP_RIGHT
+    formation: str = "SHOTGUN"  # SHOTGUN, UNDER_CENTER, I_FORM, TRIPS, etc.
+
+
+class SubstitutionRequest(BaseModel):
+    position: str  # QB, RB, WR, TE, K, P
+    player_out: str  # player name to remove from starters
+    player_in: str  # player name to put in as starter
 
 
 class PlayCallRequest(BaseModel):
@@ -113,13 +126,44 @@ def get_game(game_id: str):
 
 @app.post("/games/{game_id}/play")
 def execute_play(game_id: str):
-    """Execute a single play."""
+    """Execute a single play (AI-controlled)."""
     game = _get_game(game_id)
 
     if game.state.is_over:
         raise HTTPException(status_code=400, detail="Game is over")
 
     result = game.execute_play()
+
+    return {
+        "game_id": game_id,
+        "play_result": {
+            "play_type": result.play_type,
+            "yards": result.yards_gained,
+            "result": result.result,
+            "description": result.description,
+            "is_touchdown": result.is_touchdown,
+            "turnover": result.turnover,
+        },
+        "state": _serialize_state(game.state),
+    }
+
+
+@app.post("/games/{game_id}/human-play")
+def execute_human_play(game_id: str, request: HumanPlayCallRequest):
+    """Execute a play with a human-specified play call."""
+    game = _get_game(game_id)
+
+    if game.state.is_over:
+        raise HTTPException(status_code=400, detail="Game is over")
+
+    play_call = PlayCall(
+        play_type=request.play_type.upper(),
+        formation=request.formation.upper(),
+        direction=request.direction.upper(),
+        reasoning="Human play call",
+    )
+
+    result = game.execute_play(play_call=play_call)
 
     return {
         "game_id": game_id,
@@ -211,6 +255,172 @@ def health():
     return {"status": "ok", "active_games": len(_active_games)}
 
 
+@app.get("/games/{game_id}/personnel")
+def get_personnel(game_id: str):
+    """Get current offensive and defensive personnel on the field."""
+    game = _get_game(game_id)
+
+    offense_team = game.get_offense_team()
+    defense_team = game.get_defense_team()
+
+    def _player_brief(p):
+        return {
+            "name": p.player_name,
+            "position": p.position,
+            "number": p.number,
+            "overall_grade": p.overall_grade,
+            "receiver_letter": getattr(p, "receiver_letter", ""),
+        }
+
+    offense_starters = {}
+    for pos in ["QB", "RB", "WR", "TE", "K", "P"]:
+        starter = offense_team.roster.get_starter(pos)
+        if starter:
+            offense_starters[pos] = _player_brief(starter)
+
+    # Include WR2, WR3, TE if available
+    offense_receivers = []
+    for wr in offense_team.roster.wrs[:3]:
+        offense_receivers.append(_player_brief(wr))
+    for te in offense_team.roster.tes[:1]:
+        offense_receivers.append(_player_brief(te))
+
+    defense_players = [_player_brief(p) for p in defense_team.roster.defenders[:11]]
+
+    return {
+        "possession": game.state.possession,
+        "offense_team": offense_team.abbreviation,
+        "defense_team": defense_team.abbreviation,
+        "offense_starters": offense_starters,
+        "offense_receivers": offense_receivers,
+        "defense_players": defense_players,
+        "offense_all": [_player_brief(p) for p in offense_team.roster.all_players()],
+        "defense_all": [_player_brief(p) for p in defense_team.roster.all_players()],
+    }
+
+
+@app.post("/games/{game_id}/substitute")
+def substitute_player(game_id: str, request: SubstitutionRequest):
+    """Substitute a player on the current possession team."""
+    game = _get_game(game_id)
+
+    pos = request.position.upper()
+    team = game.get_offense_team()
+
+    pos_map = {
+        "QB": team.roster.qbs,
+        "RB": team.roster.rbs,
+        "WR": team.roster.wrs,
+        "TE": team.roster.tes,
+        "K": team.roster.kickers,
+        "P": team.roster.punters,
+    }
+
+    player_list = pos_map.get(pos)
+    if player_list is None:
+        raise HTTPException(status_code=400, detail=f"Invalid position: {pos}")
+
+    # Find player_in in the list
+    player_in_obj = None
+    player_in_idx = None
+    for i, p in enumerate(player_list):
+        if p.player_name.lower() == request.player_in.lower():
+            player_in_obj = p
+            player_in_idx = i
+            break
+
+    if player_in_obj is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Player '{request.player_in}' not found at {pos}",
+        )
+
+    # Find player_out (should be the starter at index 0)
+    player_out_idx = None
+    for i, p in enumerate(player_list):
+        if p.player_name.lower() == request.player_out.lower():
+            player_out_idx = i
+            break
+
+    if player_out_idx is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Player '{request.player_out}' not found at {pos}",
+        )
+
+    # Swap positions in the list so player_in becomes the starter
+    player_list[player_out_idx], player_list[player_in_idx] = (
+        player_list[player_in_idx],
+        player_list[player_out_idx],
+    )
+
+    game.state.play_log.append(
+        f"SUB: {request.player_in} replaces {request.player_out} at {pos}"
+    )
+
+    return {
+        "message": f"{request.player_in} now starting at {pos}",
+        "state": _serialize_state(game.state),
+    }
+
+
+@app.get("/games/{game_id}/gamelog")
+def get_game_log(game_id: str):
+    """Get the full game log as structured data."""
+    game = _get_game(game_id)
+    return {
+        "game_id": game_id,
+        "log": game.state.play_log,
+        "drives": [
+            {
+                "team": d.team,
+                "plays": d.plays,
+                "yards": d.yards,
+                "result": d.result,
+                "points_scored": d.points_scored,
+                "drive_log": d.drive_log,
+            }
+            for d in game.state.drives
+        ],
+    }
+
+
+@app.get("/games/{game_id}/gamelog/download")
+def download_game_log(game_id: str):
+    """Download the full game log as a plain text file."""
+    game = _get_game(game_id)
+
+    lines = [
+        f"Statis Pro Football - Game Log",
+        f"{'=' * 50}",
+        f"{game.state.away_team} @ {game.state.home_team}",
+        f"Final Score: {game.state.away_team} {game.state.score.away} - "
+        f"{game.state.home_team} {game.state.score.home}",
+        f"{'=' * 50}",
+        "",
+    ]
+    for entry in game.state.play_log:
+        lines.append(entry)
+
+    if game.state.drives:
+        lines.append("")
+        lines.append(f"{'=' * 50}")
+        lines.append("DRIVE SUMMARY")
+        lines.append(f"{'=' * 50}")
+        for i, d in enumerate(game.state.drives, 1):
+            lines.append(
+                f"Drive {i}: {d.team} - {d.plays} plays, {d.yards} yds - "
+                f"{d.result} ({d.points_scored} pts)"
+            )
+
+    content = "\n".join(lines)
+    return PlainTextResponse(
+        content=content,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{game_id}_gamelog.txt"'},
+    )
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _get_game(game_id: str) -> Game:
@@ -232,7 +442,9 @@ def _serialize_state(state: GameState) -> dict:
         "distance": state.distance,
         "score": {"home": state.score.home, "away": state.score.away},
         "is_over": state.is_over,
-        "last_plays": state.play_log[-10:] if state.play_log else [],
+        "timeouts_home": state.timeouts_home,
+        "timeouts_away": state.timeouts_away,
+        "last_plays": state.play_log[-20:] if state.play_log else [],
     }
 
 
