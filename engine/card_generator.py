@@ -1,5 +1,8 @@
 """Card generator for Statis Pro Football player cards.
 
+Supports both 5th-edition card formats (48/12-slot with receiver letters)
+and legacy 64-slot cards.
+
 Uses FAC distribution tables from ``fac_distributions`` to determine the
 fixed number of slots per outcome type, then fills yardage values from
 grade-appropriate pools.
@@ -7,13 +10,17 @@ grade-appropriate pools.
 import random
 from typing import Dict, Any, List, Tuple
 
-from .player_card import PlayerCard
+from .player_card import PlayerCard, PASS_SLOTS, RUN_SLOTS, RECEIVER_LETTERS
 from .fac_distributions import (
-    all_slots, SLOT_COUNT,
+    all_slots, pass_slots, run_slots,
+    SLOT_COUNT, PASS_SLOT_COUNT, RUN_SLOT_COUNT,
     qb_short_pass_distribution, qb_long_pass_distribution,
     qb_screen_pass_distribution, qb_rush_distribution,
     rb_run_distribution, reception_distribution,
     punter_distribution,
+    qb_pass_distribution_5e, qb_long_pass_distribution_5e,
+    qb_quick_pass_distribution_5e,
+    rb_run_distribution_5e, reception_distribution_5e,
     get_yards_pool,
     SHORT_PASS_YARDS, LONG_PASS_YARDS, SCREEN_PASS_YARDS,
     INSIDE_RUN_YARDS, OUTSIDE_RUN_YARDS, QB_RUSH_YARDS,
@@ -318,3 +325,201 @@ class CardGenerator:
             "run_stop_rating": run_stop,
         }
         return card
+
+    # ── 5th-Edition card generators ──────────────────────────────────
+
+    def generate_qb_card_5e(self, name: str, team: str, number: int,
+                            comp_pct: float, ypa: float, int_rate: float,
+                            sack_rate: float, grade: str,
+                            n_receivers: int = 5) -> PlayerCard:
+        """Generate a 5th-edition QB card with 48-slot receiver-letter columns."""
+        card = PlayerCard(
+            player_name=name, team=team, position="QB",
+            number=number, overall_grade=grade,
+        )
+        card.short_pass = _make_qb_pass_5e(comp_pct, int_rate, grade, n_receivers)
+        card.long_pass = _make_qb_long_pass_5e(comp_pct, int_rate, grade, n_receivers)
+        card.quick_pass = _make_qb_quick_pass_5e(comp_pct, int_rate, grade, n_receivers)
+        card.stats_summary = {
+            "comp_pct": comp_pct, "ypa": ypa,
+            "int_rate": int_rate, "sack_rate": sack_rate,
+        }
+        return card
+
+    def generate_rb_card_5e(self, name: str, team: str, number: int,
+                            ypc: float, fumble_rate: float, grade: str) -> PlayerCard:
+        """Generate a 5th-edition RB card with 12-slot run columns."""
+        card = PlayerCard(
+            player_name=name, team=team, position="RB",
+            number=number, overall_grade=grade,
+        )
+        card.inside_run = _make_rb_run_5e(ypc, fumble_rate, grade, is_outside=False)
+        card.outside_run = _make_rb_run_5e(ypc, fumble_rate, grade, is_outside=True)
+        card.sweep = _make_rb_run_5e(ypc, fumble_rate, grade, is_sweep=True)
+        card.stats_summary = {"ypc": ypc, "fumble_rate": fumble_rate}
+        return card
+
+    def generate_wr_card_5e(self, name: str, team: str, number: int,
+                            catch_rate: float, avg_yards: float, grade: str,
+                            receiver_letter: str = "A") -> PlayerCard:
+        """Generate a 5th-edition WR card with 48-slot reception columns."""
+        card = PlayerCard(
+            player_name=name, team=team, position="WR",
+            number=number, overall_grade=grade,
+        )
+        card.receiver_letter = receiver_letter
+        card.short_reception = _make_wr_reception_5e(catch_rate, avg_yards, grade, is_long=False)
+        card.long_reception = _make_wr_reception_5e(catch_rate * 0.7, avg_yards, grade, is_long=True)
+        card.stats_summary = {"catch_rate": catch_rate, "avg_yards": avg_yards}
+        return card
+
+    def generate_te_card_5e(self, name: str, team: str, number: int,
+                            catch_rate: float, avg_yards: float, grade: str,
+                            receiver_letter: str = "D") -> PlayerCard:
+        """Generate a 5th-edition TE card with 48-slot reception columns."""
+        card = PlayerCard(
+            player_name=name, team=team, position="TE",
+            number=number, overall_grade=grade,
+        )
+        card.receiver_letter = receiver_letter
+        card.short_reception = _make_wr_reception_5e(catch_rate, avg_yards, grade, is_long=False)
+        card.long_reception = _make_wr_reception_5e(catch_rate * 0.6, avg_yards, grade, is_long=True)
+        card.stats_summary = {"catch_rate": catch_rate, "avg_yards": avg_yards}
+        return card
+
+    def generate_def_card_5e(self, name: str, team: str, number: int, position: str,
+                             pass_rush: int, coverage: int, run_stop: int, grade: str,
+                             defender_letter: str = "") -> PlayerCard:
+        """Generate a 5th-edition defensive player card with a defender letter."""
+        card = PlayerCard(
+            player_name=name, team=team, position=position,
+            number=number, overall_grade=grade,
+        )
+        card.pass_rush_rating = pass_rush
+        card.coverage_rating = coverage
+        card.run_stop_rating = run_stop
+        card.defender_letter = defender_letter
+        card.stats_summary = {
+            "pass_rush_rating": pass_rush,
+            "coverage_rating": coverage,
+            "run_stop_rating": run_stop,
+        }
+        return card
+
+
+# ── 5th-edition column builders ──────────────────────────────────────
+
+def _distribute_pass_results(slot_assignments: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Map a list of 48 result dicts to pass-number slot keys ("1"-"48")."""
+    slots = pass_slots()
+    assert len(slot_assignments) == PASS_SLOT_COUNT, \
+        f"Expected {PASS_SLOT_COUNT} slots, got {len(slot_assignments)}"
+    return {slot: result for slot, result in zip(slots, slot_assignments)}
+
+
+def _distribute_run_results(slot_assignments: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Map a list of 12 result dicts to run-number slot keys ("1"-"12")."""
+    slots = run_slots()
+    assert len(slot_assignments) == RUN_SLOT_COUNT, \
+        f"Expected {RUN_SLOT_COUNT} slots, got {len(slot_assignments)}"
+    return {slot: result for slot, result in zip(slots, slot_assignments)}
+
+
+def _make_qb_pass_5e(comp_pct: float, int_pct: float,
+                     grade: str, n_receivers: int = 5) -> Dict[str, Any]:
+    """Generate a 5th-edition QB short-pass column (48 rows, receiver letters)."""
+    dist = qb_pass_distribution_5e(comp_pct, int_pct, grade, n_receivers)
+
+    results: List[Dict[str, Any]] = []
+    for letter in RECEIVER_LETTERS[:n_receivers]:
+        for _ in range(dist.get(letter, 0)):
+            results.append({"result": letter, "yards": 0, "td": False})
+    for _ in range(dist["INC"]):
+        results.append({"result": "INC", "yards": 0, "td": False})
+    for _ in range(dist["INT"]):
+        results.append({"result": "INT", "yards": 0, "td": False})
+
+    random.shuffle(results)
+    return _distribute_pass_results(results)
+
+
+def _make_qb_long_pass_5e(comp_pct: float, int_pct: float,
+                           grade: str, n_receivers: int = 5) -> Dict[str, Any]:
+    """Generate a 5th-edition QB long-pass column (48 rows)."""
+    dist = qb_long_pass_distribution_5e(comp_pct, int_pct, grade, n_receivers)
+
+    results: List[Dict[str, Any]] = []
+    for letter in RECEIVER_LETTERS[:n_receivers]:
+        for _ in range(dist.get(letter, 0)):
+            results.append({"result": letter, "yards": 0, "td": False})
+    for _ in range(dist["INC"]):
+        results.append({"result": "INC", "yards": 0, "td": False})
+    for _ in range(dist["INT"]):
+        results.append({"result": "INT", "yards": 0, "td": False})
+
+    random.shuffle(results)
+    return _distribute_pass_results(results)
+
+
+def _make_qb_quick_pass_5e(comp_pct: float, int_pct: float,
+                            grade: str, n_receivers: int = 5) -> Dict[str, Any]:
+    """Generate a 5th-edition QB quick-pass column (48 rows)."""
+    dist = qb_quick_pass_distribution_5e(comp_pct, int_pct, grade, n_receivers)
+
+    results: List[Dict[str, Any]] = []
+    for letter in RECEIVER_LETTERS[:n_receivers]:
+        for _ in range(dist.get(letter, 0)):
+            results.append({"result": letter, "yards": 0, "td": False})
+    for _ in range(dist["INC"]):
+        results.append({"result": "INC", "yards": 0, "td": False})
+    for _ in range(dist["INT"]):
+        results.append({"result": "INT", "yards": 0, "td": False})
+
+    random.shuffle(results)
+    return _distribute_pass_results(results)
+
+
+def _make_rb_run_5e(ypc: float, fumble_rate: float, grade: str,
+                    is_outside: bool = False, is_sweep: bool = False) -> Dict[str, Any]:
+    """Generate a 5th-edition RB run column (12 rows)."""
+    dist = rb_run_distribution_5e(fumble_rate, grade, is_outside=is_outside, is_sweep=is_sweep)
+    if is_sweep:
+        gain_pool, gain_weights = get_yards_pool(OUTSIDE_RUN_YARDS, grade)
+    elif is_outside:
+        gain_pool, gain_weights = get_yards_pool(OUTSIDE_RUN_YARDS, grade)
+    else:
+        gain_pool, gain_weights = get_yards_pool(INSIDE_RUN_YARDS, grade)
+
+    results: List[Dict[str, Any]] = []
+    for _ in range(dist["GAIN"]):
+        yds = _pick_yards(gain_pool, gain_weights)
+        results.append({"result": "GAIN", "yards": yds, "td": random.random() < 0.04})
+    for _ in range(dist["FUMBLE"]):
+        results.append({"result": "FUMBLE", "yards": 0, "td": False})
+    for _ in range(dist["BREAKAWAY"]):
+        breakaway_yards = random.choice([15, 20, 25, 30, 40, 50])
+        results.append({"result": "BREAKAWAY", "yards": breakaway_yards, "td": random.random() < 0.3})
+
+    random.shuffle(results)
+    return _distribute_run_results(results)
+
+
+def _make_wr_reception_5e(catch_rate: float, avg_yards: float,
+                          grade: str, is_long: bool = False) -> Dict[str, Any]:
+    """Generate a 5th-edition WR/TE reception column (48 rows)."""
+    dist = reception_distribution_5e(catch_rate, is_long)
+    if is_long:
+        pool, weights = get_yards_pool(LONG_RECEPTION_YARDS, grade)
+    else:
+        pool, weights = get_yards_pool(SHORT_RECEPTION_YARDS, grade)
+
+    results: List[Dict[str, Any]] = []
+    for _ in range(dist["CATCH"]):
+        yds = _pick_yards(pool, weights)
+        td = random.random() < (0.06 if is_long else 0.04)
+        results.append({"result": "CATCH", "yards": yds, "td": td})
+    for _ in range(dist["INCOMPLETE"]):
+        results.append({"result": "INC", "yards": 0, "td": False})
+
+    random.shuffle(results)
+    return _distribute_pass_results(results)

@@ -4,17 +4,33 @@ A digital implementation of the classic Statis Pro Football tabletop game, featu
 
 ## Overview
 
-Statis Pro Football is a dice-based football simulation where play outcomes are determined by rolling Fast Action Dice (an 11–88 system using two 8-sided dice) and consulting player cards. Each player's card reflects their real-world NFL statistics, translating them into 64-slot lookup tables that drive realistic game outcomes.
+Statis Pro Football supports two game modes:
+
+### 5th Edition Mode (New!)
+
+The **5th-edition FAC deck system** uses a physical deck of **109 Fast Action Cards** that faithfully reproduce the Statis Pro Football 5th Edition mechanics:
+
+- **109-card deck** — 96 standard cards (numbers 1–48 appearing twice, with out-of-bounds variants) + 13 Z-cards (special events)
+- **Draw-without-replacement** — Cards are drawn one at a time until the deck is exhausted, then reshuffled
+- **48-slot QB pass columns** — Pass Numbers 1–48 produce receiver letters (A–E), INC, or INT
+- **12-slot RB run columns** — Run Numbers 1–12 with inside, outside, and sweep directions
+- **Two-stage pass resolution** — QB card determines receiver letter → receiver card determines yards
+- **FAC-driven mechanics** — Sack determination (ER field), receiver targeting (QK/SH/LG), screen results (SC), blocking matchups (SL/IL/SR/IR), and solitaire play calling (SOLO field)
+- **Z-card system** — 13 Z-cards trigger special events (injuries, penalties, fumbles)
+
+### Legacy Mode
+
+The original **d8×d8 dice-based system** (64 slots, range 11–88) remains fully supported for backward compatibility.
 
 ### Features
 
 - **Complete Game Engine** — Full football simulation with drives, scoring, penalties, turnovers, clock management, and overtime
-- **AI Play Calling** — Solitaire mode with intelligent play selection based on game situation, down/distance, and score
-- **Player Card System** — 64-slot cards generated from real NFL statistics for QBs, RBs, WRs, TEs, kickers, punters, and defenders
+- **AI Play Calling** — Solitaire mode with both legacy dice-based and 5th-edition SOLO field-based play selection
+- **Player Card System** — 5th-edition (48/12-slot) and legacy (64-slot) cards generated from real NFL statistics
 - **Two Seasons of Data** — 2024 (2023 NFL stats) and 2025 (2024 NFL stats) with all 32 teams
 - **Web GUI** — React/TypeScript frontend with game board, play-by-play log, dice roller, and card viewer
 - **REST API** — FastAPI backend with endpoints for game management, dice rolling, and card browsing
-- **Comprehensive Tests** — 100+ tests covering dice distribution, card generation, game mechanics, and team loading
+- **Comprehensive Tests** — 200+ tests covering dice/deck distribution, card generation, game mechanics, and team loading
 
 ## Quick Start
 
@@ -49,11 +65,14 @@ from engine.game import Game
 home = Team.load("KC", 2025)   # Kansas City Chiefs
 away = Team.load("BUF", 2025)  # Buffalo Bills
 
-# Simulate a full game
-game = Game(home, away)
+# 5th Edition mode (109-card FAC deck)
+game = Game(home, away, use_5e=True, seed=42)
 state = game.simulate_game()
-
 print(f"Final Score: {state.away_team} {state.score.away} - {state.home_team} {state.score.home}")
+
+# Legacy mode (d8×d8 dice)
+game = Game(home, away, use_5e=False)
+state = game.simulate_game()
 ```
 
 ### Run the API Server
@@ -79,11 +98,11 @@ npm run dev
 ### Generate Player Cards
 
 ```bash
-# Generate 2025 season cards (2024 NFL stats)
-python scripts/generate_cards.py --season 2025
+# Generate 2025 season cards (legacy 64-slot format)
+python engine/data/generate_2025_data.py
 
-# Generate 2024 season cards (2023 NFL stats)
-python scripts/generate_cards.py --season 2024
+# Generate 2025 season cards (5th-edition 48/12-slot format)
+python engine/data/generate_2025_5e_data.py
 ```
 
 ### Run Tests
@@ -98,20 +117,24 @@ python -m pytest tests/ -v
 Statis-Pro-Football/
 ├── engine/                     # Python game engine
 │   ├── api_server.py           # FastAPI REST server
-│   ├── card_generator.py       # Generate player cards from stats
+│   ├── card_generator.py       # Generate player cards (legacy + 5th-ed)
 │   ├── charts.py               # Penalty, return, and recovery charts
-│   ├── fast_action_dice.py     # 11-88 dice system
+│   ├── fac_deck.py             # 109-card FAC deck (5th Edition)
+│   ├── fac_distributions.py    # Card distribution tables (48/12/64-slot)
+│   ├── fast_action_dice.py     # 11-88 dice system (legacy)
 │   ├── game.py                 # Core game state and logic
-│   ├── play_resolver.py        # Play outcome resolution
+│   ├── play_resolver.py        # Play outcome resolution (legacy + 5th-ed)
 │   ├── player_card.py          # Player card data model
-│   ├── solitaire.py            # AI play calling
+│   ├── solitaire.py            # AI play calling (legacy + SOLO-based)
 │   ├── stats_fetcher.py        # Stats lookup with fallback data
 │   ├── team.py                 # Team and roster management
 │   └── data/
 │       ├── 2024/               # 2024 season team JSON files (32 teams)
-│       ├── 2025/               # 2025 season team JSON files (32 teams)
+│       ├── 2025/               # 2025 season team JSON files (legacy, 32 teams)
+│       ├── 2025_5e/            # 2025 season team JSON files (5th-ed, 32 teams)
 │       ├── generate_2024_data.py
-│       └── generate_2025_data.py
+│       ├── generate_2025_data.py
+│       └── generate_2025_5e_data.py
 ├── gui/                        # React/TypeScript web frontend
 │   ├── src/
 │   │   ├── components/         # UI components
@@ -124,6 +147,8 @@ Statis-Pro-Football/
 │   └── requirements.txt        # Python dependencies
 ├── tests/                      # Test suite
 │   ├── test_engine.py          # Integration tests
+│   ├── test_5e_system.py       # 5th-edition system tests
+│   ├── test_fac_system.py      # FAC system tests
 │   ├── test_card_generator.py  # Card generation tests
 │   └── test_fast_action_dice.py # Dice system tests
 └── docs/                       # Documentation
@@ -136,32 +161,61 @@ Statis-Pro-Football/
 
 ## How It Works
 
-### The Fast Action Dice
+### 5th Edition: The FAC Deck
+
+The 5th-edition system uses a deck of **109 Fast Action Cards**:
+
+| Card Type | Count | Description |
+|-----------|-------|-------------|
+| Standard | 96 | Numbers 1–48 (each twice: normal + out-of-bounds variant) |
+| Z Cards | 13 | Special event cards (injuries, penalties, fumbles) |
+
+Each FAC card contains 13 fields that drive all game mechanics:
+
+| Field | Used For |
+|-------|----------|
+| RUN# (1–12) | RB card lookup |
+| PASS# (1–48) | QB/receiver card lookup |
+| SL/IL/SR/IR | Defensive blocking matchups |
+| ER | Pass rush / sack determination |
+| QK/SH/LG | Receiver targeting override |
+| SC | Screen pass result |
+| Z RES | Special events (penalty, injury, fumble) |
+| SOLO | Solitaire play calling |
+
+**Pass Play Resolution (5th Edition):**
+1. Draw FAC card
+2. Check ER field → if negative, **SACK** (play over)
+3. Check receiver target field → may override receiver
+4. Look up PASS# on QB card → receiver letter (A–E) / INC / INT
+5. If receiver letter → look up same PASS# on receiver card → yards
+
+**Run Play Resolution (5th Edition):**
+1. Draw FAC card
+2. Look up RUN# on RB card (inside/outside/sweep) → yards
+3. If "(OB)" suffix → out of bounds (clock stops)
+4. Check Z RES for fumbles/injuries
+
+### Legacy: The Fast Action Dice
 
 Two 8-sided dice (values 1–8) produce a two-digit number from 11 to 88, giving 64 possible outcomes. Each roll determines:
 
-1. **Play Tendency** — RUN, SHORT_PASS, LONG_PASS, or BLITZ (mapped from the dice combination)
+1. **Play Tendency** — RUN, SHORT_PASS, LONG_PASS, or BLITZ
 2. **Penalty Check** — 5 specific combinations (~8% chance) trigger a penalty roll
 3. **Turnover Modifier** — A separate d8 roll for turnover-related effects
 
 ### Player Cards
 
-Every player has a card with 64 slots (matching the dice outcomes). When a play is called:
+**5th Edition cards:**
 
-1. Roll the Fast Action Dice → get a slot number (e.g., "37")
-2. Look up that slot on the relevant player's card column
-3. The slot tells you the result: COMPLETE for 12 yards, FUMBLE, SACK for -5, etc.
-
-Different positions use different card columns:
-
-| Position | Card Columns |
-|----------|-------------|
-| QB | Short Pass, Long Pass, Screen Pass |
-| RB | Inside Run, Outside Run |
-| WR/TE | Short Reception, Long Reception |
-| K | FG Chart (by distance), XP Rate |
-| P | Avg Distance, Inside-20 Rate |
-| DEF | Pass Rush, Coverage, Run Stop ratings |
+| Position | Rows | Columns | Cell Contents |
+|----------|------|---------|---------------|
+| QB | 48 (Pass#) | Short, Long, Quick Pass | Receiver letter (A–E), INC, INT |
+| RB | 12 (Run#) | Inside, Outside, Sweep | Yards, FUMBLE, BREAKAWAY |
+| WR/TE | 48 (Pass#) | Short/Long Reception | Yards, INC |
+| K | — | FG Chart (by distance), XP Rate | Success probability |
+| P | — | Avg Distance, Inside-20 Rate | Distance/placement |
+| DEF | — | Pass Rush, Coverage, Run Stop + letter | Ratings (0–99) |
 
 ### Grades
 

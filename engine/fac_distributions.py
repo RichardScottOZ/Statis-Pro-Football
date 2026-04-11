@@ -1,33 +1,190 @@
 """Fast Action Card (FAC) distribution tables for Statis Pro Football.
 
-This module defines the canonical FAC number distributions used to build
-player cards.  Every position's card is constructed by assigning a fixed
-number of slots (out of 64) to each outcome type, then filling those
-slots with yardage values drawn from the appropriate pool.
+5th-Edition card structure
+==========================
+  * QB cards:  48 rows (Pass Numbers 1–48).
+    Each cell → receiver letter (A–E) / INC / INT.
+  * RB cards:  12 rows (Run Numbers 1–12).
+    Each cell → yardage / FUMBLE / BREAKAWAY / TD.
+  * WR/TE cards: 48 rows (Pass Numbers 1–48).
+    Each cell → yards gained / INC.
 
-The tables below mirror the classic Statis Pro Football system:
-  * Pass Numbers (PN) — used for QB passing and receiver cards
-  * Run Numbers  (RN) — used for RB/QB rush and punter cards
-  * Z-card triggers and event tables
+Legacy 64-slot helpers are kept for backward compatibility with
+pre-5th-edition team data files.
 
-Out-of-Bounds (OOB) is modelled as a distinct run-play result that
-stops the game clock.
+This module also provides:
+  * Yardage pools by grade (used during card generation)
+  * Z-card event tables (now primarily triggered by FACDeck Z cards)
+  * Defence formation modifiers
 """
 
 from typing import Dict, List, Tuple, Any
 
 
 # ──────────────────────────────────────────────────────────────────────
-#  Helpers
+#  Slot helpers
 # ──────────────────────────────────────────────────────────────────────
 
+PASS_SLOT_COUNT = 48    # 5th-edition pass numbers 1–48
+RUN_SLOT_COUNT = 12     # 5th-edition run numbers 1–12
+SLOT_COUNT = 64         # Legacy 8×8 dice grid
+
+
 def all_slots() -> List[str]:
-    """Return all 64 slot keys from 11 to 88."""
+    """Return all 64 legacy slot keys from 11 to 88."""
     return [f"{t}{o}" for t in range(1, 9) for o in range(1, 9)]
 
 
-SLOT_COUNT = 64  # 8×8 dice grid
+def pass_slots() -> List[str]:
+    """Return all 48 pass-number slot keys ("1" through "48")."""
+    return [str(n) for n in range(1, PASS_SLOT_COUNT + 1)]
 
+
+def run_slots() -> List[str]:
+    """Return all 12 run-number slot keys ("1" through "12")."""
+    return [str(n) for n in range(1, RUN_SLOT_COUNT + 1)]
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  5th-Edition QB Pass distribution (48 slots, receiver-letter results)
+# ──────────────────────────────────────────────────────────────────────
+
+RECEIVER_LETTERS = ["A", "B", "C", "D", "E"]
+
+
+def qb_pass_distribution_5e(
+    comp_pct: float,
+    int_pct: float,
+    grade: str,
+    n_receivers: int = 5,
+) -> Dict[str, int]:
+    """Return {result_type: slot_count} for a 5th-ed QB pass column (48 slots).
+
+    Results are receiver letters (A-E), INC, or INT.
+    On COMPLETE results the QB card returns the receiver letter rather than
+    yardage — yardage comes from the receiver's own card in the 2nd stage.
+
+    Parameters
+    ----------
+    comp_pct : float
+        Overall completion percentage (0-1).
+    int_pct : float
+        Interception rate per attempt (0-1).
+    grade : str
+        Player grade (A+/A/B/C/D).
+    n_receivers : int
+        Number of receiver letters to distribute completions across (1-5).
+    """
+    n_int = max(1, round(int_pct * PASS_SLOT_COUNT))
+    n_complete = max(0, round(comp_pct * PASS_SLOT_COUNT))
+    n_incomplete = PASS_SLOT_COUNT - n_complete - n_int
+
+    if n_incomplete < 0:
+        n_complete = PASS_SLOT_COUNT - n_int
+        n_incomplete = 0
+
+    # Distribute completions among receiver letters
+    # Primary receiver gets more targets; distribution tapers off
+    n_receivers = max(1, min(n_receivers, 5))
+    result: Dict[str, int] = {}
+    remaining_comp = n_complete
+    weights = [30, 25, 20, 15, 10][:n_receivers]
+    total_w = sum(weights)
+    for i in range(n_receivers):
+        letter = RECEIVER_LETTERS[i]
+        if i < n_receivers - 1:
+            count = round(n_complete * weights[i] / total_w)
+        else:
+            count = remaining_comp  # last receiver gets the remainder
+        count = max(0, count)
+        result[letter] = count
+        remaining_comp -= count
+
+    result["INC"] = n_incomplete
+    result["INT"] = n_int
+    return result
+
+
+def qb_long_pass_distribution_5e(
+    comp_pct: float,
+    int_pct: float,
+    grade: str,
+    n_receivers: int = 5,
+) -> Dict[str, int]:
+    """Return slot counts for a 5th-ed QB long-pass column (48 slots).
+
+    Long passes have lower completion and higher interception rates.
+    """
+    long_comp_pct = comp_pct * 0.55
+    long_int_pct = int_pct * 1.5
+    return qb_pass_distribution_5e(long_comp_pct, long_int_pct, grade, n_receivers)
+
+
+def qb_quick_pass_distribution_5e(
+    comp_pct: float,
+    int_pct: float,
+    grade: str,
+    n_receivers: int = 5,
+) -> Dict[str, int]:
+    """Return slot counts for a 5th-ed QB quick-pass column (48 slots).
+
+    Quick passes have higher completion but mostly short-yardage results.
+    """
+    quick_comp_pct = min(0.95, comp_pct * 1.1)
+    quick_int_pct = max(0.01, int_pct * 0.5)
+    return qb_pass_distribution_5e(quick_comp_pct, quick_int_pct, grade, n_receivers)
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  5th-Edition RB Run distribution (12 slots)
+# ──────────────────────────────────────────────────────────────────────
+
+def rb_run_distribution_5e(
+    fumble_rate: float,
+    grade: str,
+    is_outside: bool = False,
+    is_sweep: bool = False,
+) -> Dict[str, int]:
+    """Return {result_type: slot_count} for a 5th-ed RB run column (12 slots)."""
+    n_fumble = max(0, round(fumble_rate * RUN_SLOT_COUNT))
+    # Breakaway chance depends on grade
+    breakaway_map = {"A+": 1, "A": 1, "B": 1, "C": 0, "D": 0}
+    n_breakaway = breakaway_map.get(grade, 0)
+    if is_sweep or is_outside:
+        n_breakaway = min(n_breakaway + 1, 2)  # sweeps/outside have more big-play potential
+
+    n_gain = RUN_SLOT_COUNT - n_fumble - n_breakaway
+    if n_gain < 0:
+        n_gain = RUN_SLOT_COUNT - n_fumble
+        n_breakaway = 0
+
+    return {
+        "GAIN": n_gain,
+        "FUMBLE": n_fumble,
+        "BREAKAWAY": n_breakaway,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  5th-Edition WR/TE Reception distribution (48 slots)
+# ──────────────────────────────────────────────────────────────────────
+
+def reception_distribution_5e(
+    catch_rate: float,
+    is_long: bool = False,
+) -> Dict[str, int]:
+    """Return {result_type: slot_count} for a 5th-ed receiver column (48 slots)."""
+    n_catch = round(catch_rate * PASS_SLOT_COUNT)
+    n_incomplete = PASS_SLOT_COUNT - n_catch
+    return {
+        "CATCH": n_catch,
+        "INCOMPLETE": n_incomplete,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Legacy 64-slot distributions  (kept for backward compatibility)
+# ──────────────────────────────────────────────────────────────────────
 
 # ──────────────────────────────────────────────────────────────────────
 #  QB Short-Pass distribution  (Pass Number → result)

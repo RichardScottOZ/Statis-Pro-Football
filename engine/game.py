@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 
 from .fast_action_dice import FastActionDice, DiceResult, PlayTendency
+from .fac_deck import FACDeck, FACCard
 from .player_card import PlayerCard
 from .team import Team
 from .play_resolver import PlayResolver, PlayResult
@@ -84,13 +85,21 @@ class GameState:
 
 
 class Game:
-    """Core game logic for Statis Pro Football."""
+    """Core game logic for Statis Pro Football.
+
+    Supports two modes:
+      * Legacy mode (use_5e=False): Uses FastActionDice (d8×d8) — original system
+      * 5th-edition mode (use_5e=True): Uses FACDeck (109-card deck)
+    """
 
     def __init__(self, home_team: Team, away_team: Team,
-                 solitaire_home: bool = True, solitaire_away: bool = True):
+                 solitaire_home: bool = True, solitaire_away: bool = True,
+                 use_5e: bool = False, seed: Optional[int] = None):
         self.home_team = home_team
         self.away_team = away_team
         self.dice = FastActionDice()
+        self.deck = FACDeck(seed=seed)  # 5th-edition FAC deck
+        self.use_5e = use_5e
         self.resolver = PlayResolver()
         self.ai = SolitaireAI()
         self.solitaire_home = solitaire_home
@@ -190,6 +199,12 @@ class Game:
 
     def execute_play(self, play_call: Optional[PlayCall] = None) -> PlayResult:
         """Execute a single play."""
+        if self.use_5e:
+            return self._execute_play_5e(play_call)
+        return self._execute_play_legacy(play_call)
+
+    def _execute_play_legacy(self, play_call: Optional[PlayCall] = None) -> PlayResult:
+        """Execute a single play using legacy dice system."""
         dice = self.dice.roll()
         situation = self.state.to_situation()
 
@@ -453,6 +468,166 @@ class Game:
                     self.state.yard_line = new_yl
                     self.state.down = 1
                     self.state.distance = 10
+
+    # ── 5th-Edition FAC-card-based play execution ────────────────────
+
+    def _get_all_receivers(self) -> list:
+        """Get all WR + TE receivers ordered by receiver letter."""
+        team = self.get_offense_team()
+        receivers = list(team.roster.wrs) + list(team.roster.tes)
+        # Assign receiver letters if not already set
+        letters = ["A", "B", "C", "D", "E"]
+        for i, rec in enumerate(receivers[:5]):
+            if not rec.receiver_letter:
+                rec.receiver_letter = letters[i]
+        return receivers
+
+    def _execute_play_5e(self, play_call: Optional[PlayCall] = None) -> PlayResult:
+        """Execute a single play using 5th-edition FAC deck."""
+        fac_card = self.deck.draw()
+        situation = self.state.to_situation()
+
+        if play_call is None:
+            play_call = self.ai.call_play_5e(situation, fac_card)
+
+        self.state.play_log.append(
+            f"Q{self.state.quarter} {self._time_str()} | "
+            f"{'Home' if self.state.possession == 'home' else 'Away'} ball | "
+            f"{self.state.down}{self._ordinal_suffix(self.state.down)} & {self.state.distance} | "
+            f"Own {self.state.yard_line}"
+        )
+
+        if play_call.play_type == "PUNT":
+            result = self._execute_punt()
+        elif play_call.play_type == "FG":
+            result = self._execute_field_goal()
+        elif play_call.play_type == "KNEEL":
+            result = PlayResult("KNEEL", -1, "KNEEL", description="QB kneels")
+            self._advance_down(-1)
+        elif play_call.play_type == "RUN":
+            result = self._execute_run_5e(fac_card, play_call)
+        elif play_call.play_type == "SCREEN":
+            result = self._execute_screen_5e(fac_card)
+        elif play_call.play_type in ("LONG_PASS", "QUICK_PASS"):
+            result = self._execute_pass_5e(fac_card, play_call)
+        else:
+            result = self._execute_pass_5e(fac_card, play_call)
+
+        self.state.play_log.append(f"  → {result.description}")
+
+        if result.penalty:
+            self._apply_penalty(result.penalty)
+            return result
+
+        if result.turnover:
+            self._handle_turnover(result)
+            return result
+
+        if result.is_touchdown or result.result == "TD":
+            self._score_touchdown()
+            kickoff = self.resolver.resolve_kickoff()
+            self.state.play_log.append(kickoff.description)
+            new_yl = 25 if kickoff.result == "TOUCHBACK" else max(1, kickoff.yards_gained)
+            self._change_possession(new_yl)
+            return result
+
+        if play_call.play_type == "PUNT":
+            return result
+
+        if play_call.play_type == "FG":
+            if result.result == "FG_GOOD":
+                if self.state.possession == "home":
+                    self.state.score.home += 3
+                else:
+                    self.state.score.away += 3
+                self.state.play_log.append(
+                    f"Score: Away {self.state.score.away} - Home {self.state.score.home}"
+                )
+            opp_yl = max(20, 100 - self.state.yard_line - 7)
+            self._change_possession(opp_yl)
+            return result
+
+        if play_call.play_type == "KNEEL":
+            self._advance_time(40)
+            return result
+
+        self._advance_down(result.yards_gained)
+
+        if self.state.down > 4:
+            self._turnover_on_downs()
+
+        time_used = self._calculate_time(result)
+        self._advance_time(time_used)
+
+        return result
+
+    def _execute_run_5e(self, fac_card: FACCard, play_call: PlayCall) -> PlayResult:
+        rb = self.get_rb()
+        defense = self.get_defense_team()
+        def_run_stop = defense.defense_rating
+        situation = self.state.to_situation()
+        def_formation = self.ai.call_defense_5e(situation, fac_card)
+
+        direction = play_call.direction
+        # Map legacy directions to 5th-edition
+        direction_map = {"LEFT": "IL", "MIDDLE": "IL", "RIGHT": "IR"}
+        direction = direction_map.get(direction, direction)
+
+        if rb:
+            return self.resolver.resolve_run_5e(
+                fac_card, self.deck, rb, direction,
+                defense_run_stop=def_run_stop,
+                defense_formation=def_formation,
+            )
+        yards = random.choices([-1, 0, 1, 2, 3, 4, 5],
+                                weights=[5, 8, 10, 15, 20, 15, 10])[0]
+        return PlayResult("RUN", yards, "GAIN", description=f"Run for {yards} yards")
+
+    def _execute_screen_5e(self, fac_card: FACCard) -> PlayResult:
+        qb = self.get_qb()
+        rb = self.get_rb()
+        receivers = self._get_all_receivers()
+
+        if qb and rb:
+            return self.resolver.resolve_pass_5e(
+                fac_card, self.deck, qb, rb, receivers,
+                pass_type="SCREEN",
+            )
+        yards = random.randint(2, 8)
+        return PlayResult("PASS", yards, "COMPLETE",
+                          description=f"Screen pass for {yards} yards")
+
+    def _execute_pass_5e(self, fac_card: FACCard, play_call: PlayCall) -> PlayResult:
+        qb = self.get_qb()
+        receiver = self._pick_receiver(play_call)
+        receivers = self._get_all_receivers()
+        defense = self.get_defense_team()
+        situation = self.state.to_situation()
+        def_formation = self.ai.call_defense_5e(situation, fac_card)
+
+        if play_call.play_type == "LONG_PASS":
+            pass_type = "LONG"
+        elif play_call.play_type == "QUICK_PASS":
+            pass_type = "QUICK"
+        else:
+            pass_type = "SHORT"
+
+        if qb and receiver:
+            return self.resolver.resolve_pass_5e(
+                fac_card, self.deck, qb, receiver, receivers,
+                pass_type=pass_type,
+                defense_coverage=defense.defense_rating,
+                defense_pass_rush=defense.defense_rating,
+                defense_formation=def_formation,
+            )
+
+        yards = random.choices([0, 0, 5, 8, 12, 18, 25],
+                                weights=[20, 15, 15, 15, 12, 10, 5])[0]
+        return PlayResult(
+            "PASS", yards,
+            "COMPLETE" if yards > 0 else "INCOMPLETE",
+            description=f"Pass {'complete' if yards > 0 else 'incomplete'} for {yards} yards",
+        )
 
     def simulate_drive(self) -> DriveResult:
         """Simulate an entire drive."""

@@ -1,8 +1,14 @@
-"""Solitaire AI play calling for Statis Pro Football."""
+"""Solitaire AI play calling for Statis Pro Football.
+
+Supports two modes:
+  1. Legacy dice-based AI play calling (original system)
+  2. 5th-edition FAC SOLO field parsing (from the drawn FAC card)
+"""
 import random
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, Any
 from .fast_action_dice import FastActionDice, DiceResult, PlayTendency
+from .fac_deck import FACCard
 
 
 @dataclass
@@ -21,10 +27,70 @@ class GameSituation:
 @dataclass
 class PlayCall:
     """A called play."""
-    play_type: str   # RUN, SHORT_PASS, LONG_PASS, SCREEN, PUNT, FG, KICKOFF, KNEEL
+    play_type: str   # RUN, SHORT_PASS, LONG_PASS, QUICK_PASS, SCREEN, PUNT, FG, KICKOFF, KNEEL
     formation: str   # SHOTGUN, UNDER_CENTER, I_FORM, TRIPS, etc.
-    direction: str   # LEFT, RIGHT, MIDDLE, DEEP_LEFT, DEEP_RIGHT, etc.
+    direction: str   # LEFT, RIGHT, MIDDLE, IL, IR, SL, SR, DEEP_LEFT, DEEP_RIGHT, etc.
     reasoning: str
+
+
+# ── SOLO field code → PlayCall mapping ───────────────────────────────
+
+def _solo_code_to_play(code: str) -> PlayCall:
+    """Convert a SOLO field code to a PlayCall.
+
+    Codes from 5th-edition FAC cards:
+      R(BC)  = Run (Ball Carrier)
+      R(NK)  = Run (No Key — non-featured back)
+      P      = Pass (short)
+      P(x2)  = Long Pass
+      PR     = Play-action pass (short)
+      PR(x2) = Play-action long pass
+      BLZ    = Blitz defense (used as defensive call)
+    """
+    code = code.strip()
+
+    if code.startswith("R(BC)"):
+        direction = random.choice(["IL", "IR"])
+        return PlayCall("RUN", "I_FORM", direction, f"SOLO: {code}")
+    if code.startswith("R(NK)"):
+        direction = random.choice(["IL", "IR", "SL", "SR"])
+        return PlayCall("RUN", "UNDER_CENTER", direction, f"SOLO: {code}")
+    if code == "P(x2)":
+        direction = random.choice(["DEEP_LEFT", "DEEP_RIGHT"])
+        return PlayCall("LONG_PASS", "SHOTGUN", direction, f"SOLO: {code}")
+    if code == "PR(x2)":
+        direction = random.choice(["DEEP_LEFT", "DEEP_RIGHT"])
+        return PlayCall("LONG_PASS", "I_FORM", direction, f"SOLO: play-action deep")
+    if code == "PR":
+        direction = random.choice(["LEFT", "RIGHT", "MIDDLE"])
+        return PlayCall("SHORT_PASS", "I_FORM", direction, f"SOLO: play-action")
+    if code == "P":
+        direction = random.choice(["LEFT", "RIGHT", "MIDDLE"])
+        return PlayCall("SHORT_PASS", "SHOTGUN", direction, f"SOLO: {code}")
+    if code == "BLZ":
+        return PlayCall("RUN", "UNDER_CENTER", "IL", f"SOLO: blitz")
+
+    # Fallback — treat unknown codes as a run
+    return PlayCall("RUN", "I_FORM", "MIDDLE", f"SOLO: unknown code {code}")
+
+
+def _situation_number(situation: GameSituation) -> int:
+    """Map the current game situation to a SOLO situation number (1-5).
+
+    Numbers from 5th-edition:
+      1 = 1st down / standard
+      2 = 2nd down and short (≤5)
+      3 = 2nd/3rd down and long (>5)
+      4 = 3rd down / critical
+      5 = 4th down / special
+    """
+    if situation.down == 1:
+        return 1
+    if situation.down == 2:
+        return 2 if situation.distance <= 5 else 3
+    if situation.down == 3:
+        return 3 if situation.distance > 5 else 4
+    return 5  # 4th down
 
 
 class SolitaireAI:
@@ -167,3 +233,49 @@ class SolitaireAI:
             return "GOAL_LINE"
         else:
             return random.choice(["4_3", "3_4", "4_3_COVER2", "3_4_ZONE"])
+
+    # ── 5th-Edition SOLO-based play calling ──────────────────────────
+
+    def call_play_5e(self, situation: GameSituation,
+                     fac_card: Optional[FACCard] = None) -> PlayCall:
+        """Call a play using the FAC card's SOLO field (5th-edition mode).
+
+        Falls back to the legacy AI if the card has no SOLO data.
+        """
+        # Use SOLO field if available
+        if fac_card is not None and not fac_card.is_z_card:
+            solo_dict = fac_card.parse_solo()
+            if solo_dict:
+                sit_num = _situation_number(situation)
+                if sit_num in solo_dict:
+                    play_call = _solo_code_to_play(solo_dict[sit_num])
+                    # Override with special situations
+                    if situation.down == 4:
+                        return self._call_fourth_down(situation)
+                    if situation.time_remaining <= 120 and situation.score_diff < 0:
+                        return self._call_two_minute_drill(situation,
+                                                           self.dice.roll())
+                    if situation.time_remaining <= 60 and situation.score_diff > 0:
+                        return PlayCall("KNEEL", "UNDER_CENTER", "MIDDLE",
+                                        "Running out the clock")
+                    return play_call
+
+        # Fall back to legacy call_play
+        return self.call_play(situation)
+
+    def call_defense_5e(self, situation: GameSituation,
+                        fac_card: Optional[FACCard] = None) -> str:
+        """Call a defensive formation using 5th-edition SOLO field.
+
+        If the SOLO field indicates BLZ, use a blitz formation.
+        Falls back to legacy defense calling otherwise.
+        """
+        if fac_card is not None and not fac_card.is_z_card:
+            solo_dict = fac_card.parse_solo()
+            if solo_dict:
+                sit_num = _situation_number(situation)
+                code = solo_dict.get(sit_num, "")
+                if code == "BLZ":
+                    return random.choice(["4_3_BLITZ", "NICKEL_BLITZ"])
+
+        return self.call_defense(situation)
