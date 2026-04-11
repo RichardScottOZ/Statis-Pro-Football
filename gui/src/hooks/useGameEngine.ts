@@ -1,31 +1,48 @@
 import { useState, useCallback } from 'react';
 import axios from 'axios';
-import type { GameState, PlayResult, DriveResult, DiceRollResult } from '../types/game';
+import type {
+  GameState,
+  PlayResult,
+  DriveResult,
+  DiceRollResult,
+  PersonnelData,
+  HumanPlayCall,
+  GameMode,
+} from '../types/game';
 
 const API_BASE = '/api';
 
 interface UseGameEngineReturn {
   gameId: string | null;
   gameState: GameState | null;
+  gameMode: GameMode;
   lastPlay: PlayResult | null;
   lastDrive: DriveResult | null;
   lastDice: DiceRollResult | null;
+  personnel: PersonnelData | null;
   loading: boolean;
   error: string | null;
-  startGame: (homeTeam: string, awayTeam: string) => Promise<void>;
+  startGame: (homeTeam: string, awayTeam: string, mode: GameMode) => Promise<void>;
   executePlay: () => Promise<void>;
+  executeHumanPlay: (call: HumanPlayCall) => Promise<void>;
   simulateDrive: () => Promise<void>;
   simulateGame: () => Promise<void>;
   rollDice: () => Promise<void>;
+  fetchPersonnel: () => Promise<void>;
+  substitutePlayer: (position: string, playerOut: string, playerIn: string) => Promise<void>;
+  downloadGameLog: () => void;
   resetError: () => void;
+  isHumanTurn: () => boolean;
 }
 
 export function useGameEngine(): UseGameEngineReturn {
   const [gameId, setGameId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [gameMode, setGameMode] = useState<GameMode>('solitaire');
   const [lastPlay, setLastPlay] = useState<PlayResult | null>(null);
   const [lastDrive, setLastDrive] = useState<DriveResult | null>(null);
   const [lastDice, setLastDice] = useState<DiceRollResult | null>(null);
+  const [personnel, setPersonnel] = useState<PersonnelData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,20 +56,32 @@ export function useGameEngine(): UseGameEngineReturn {
     }
   };
 
-  const startGame = useCallback(async (homeTeam: string, awayTeam: string) => {
+  const startGame = useCallback(async (homeTeam: string, awayTeam: string, mode: GameMode) => {
     setLoading(true);
     setError(null);
     try {
+      const solHome = mode !== 'human_home';
+      const solAway = mode !== 'human_away';
       const res = await axios.post(`${API_BASE}/games/new`, {
         home_team: homeTeam,
         away_team: awayTeam,
-        solitaire_home: true,
-        solitaire_away: true,
+        solitaire_home: solHome,
+        solitaire_away: solAway,
       });
       setGameId(res.data.game_id);
       setGameState(res.data.state);
+      setGameMode(mode);
       setLastPlay(null);
       setLastDrive(null);
+      setPersonnel(null);
+
+      // Fetch initial personnel
+      if (mode !== 'solitaire') {
+        try {
+          const pRes = await axios.get(`${API_BASE}/games/${res.data.game_id}/personnel`);
+          setPersonnel(pRes.data);
+        } catch { /* personnel fetch is optional */ }
+      }
     } catch (err) {
       handleError(err);
     } finally {
@@ -68,6 +97,33 @@ export function useGameEngine(): UseGameEngineReturn {
       const res = await axios.post(`${API_BASE}/games/${gameId}/play`);
       setLastPlay(res.data.play_result);
       setGameState(res.data.state);
+      // Refresh personnel after play
+      if (gameMode !== 'solitaire') {
+        try {
+          const pRes = await axios.get(`${API_BASE}/games/${gameId}/personnel`);
+          setPersonnel(pRes.data);
+        } catch { /* ok */ }
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [gameId, gameMode]);
+
+  const executeHumanPlay = useCallback(async (call: HumanPlayCall) => {
+    if (!gameId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/games/${gameId}/human-play`, call);
+      setLastPlay(res.data.play_result);
+      setGameState(res.data.state);
+      // Refresh personnel after play
+      try {
+        const pRes = await axios.get(`${API_BASE}/games/${gameId}/personnel`);
+        setPersonnel(pRes.data);
+      } catch { /* ok */ }
     } catch (err) {
       handleError(err);
     } finally {
@@ -83,12 +139,18 @@ export function useGameEngine(): UseGameEngineReturn {
       const res = await axios.post(`${API_BASE}/games/${gameId}/simulate-drive`);
       setLastDrive(res.data.drive);
       setGameState(res.data.state);
+      if (gameMode !== 'solitaire') {
+        try {
+          const pRes = await axios.get(`${API_BASE}/games/${gameId}/personnel`);
+          setPersonnel(pRes.data);
+        } catch { /* ok */ }
+      }
     } catch (err) {
       handleError(err);
     } finally {
       setLoading(false);
     }
-  }, [gameId]);
+  }, [gameId, gameMode]);
 
   const simulateGame = useCallback(async () => {
     if (!gameId) return;
@@ -117,21 +179,73 @@ export function useGameEngine(): UseGameEngineReturn {
     }
   }, []);
 
+  const fetchPersonnel = useCallback(async () => {
+    if (!gameId) return;
+    try {
+      const res = await axios.get(`${API_BASE}/games/${gameId}/personnel`);
+      setPersonnel(res.data);
+    } catch (err) {
+      handleError(err);
+    }
+  }, [gameId]);
+
+  const substitutePlayer = useCallback(async (position: string, playerOut: string, playerIn: string) => {
+    if (!gameId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/games/${gameId}/substitute`, {
+        position,
+        player_out: playerOut,
+        player_in: playerIn,
+      });
+      setGameState(res.data.state);
+      // Refresh personnel
+      try {
+        const pRes = await axios.get(`${API_BASE}/games/${gameId}/personnel`);
+        setPersonnel(pRes.data);
+      } catch { /* ok */ }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [gameId]);
+
+  const downloadGameLog = useCallback(() => {
+    if (!gameId) return;
+    window.open(`${API_BASE}/games/${gameId}/gamelog/download`, '_blank');
+  }, [gameId]);
+
+  const isHumanTurn = useCallback(() => {
+    if (!gameState || gameMode === 'solitaire') return false;
+    if (gameMode === 'human_home') return gameState.possession === 'home';
+    if (gameMode === 'human_away') return gameState.possession === 'away';
+    return false;
+  }, [gameState, gameMode]);
+
   const resetError = useCallback(() => setError(null), []);
 
   return {
     gameId,
     gameState,
+    gameMode,
     lastPlay,
     lastDrive,
     lastDice,
+    personnel,
     loading,
     error,
     startGame,
     executePlay,
+    executeHumanPlay,
     simulateDrive,
     simulateGame,
     rollDice,
+    fetchPersonnel,
+    substitutePlayer,
+    downloadGameLog,
     resetError,
+    isHumanTurn,
   };
 }

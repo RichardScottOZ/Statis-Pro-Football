@@ -1,57 +1,108 @@
-import type { GameState, PlayResult, DriveResult } from '../types/game';
+import type { GameState, PlayResult, DriveResult, PersonnelData, HumanPlayCall, GameMode } from '../types/game';
 import { Scoreboard } from './Scoreboard';
 import { PlayCaller } from './PlayCaller';
+import { HumanPlayCaller } from './HumanPlayCaller';
 import { GameLog } from './GameLog';
+import { Gridiron } from './Gridiron';
+import { LetterBoards } from './LetterBoards';
+import { SubstitutionPanel } from './SubstitutionPanel';
 import { DiceRoller } from './DiceRoller';
 import type { DiceRollResult } from '../types/game';
 
 interface GameBoardProps {
   gameId: string;
   state: GameState;
+  gameMode: GameMode;
   lastPlay: PlayResult | null;
   lastDrive: DriveResult | null;
   lastDice: DiceRollResult | null;
+  personnel: PersonnelData | null;
   loading: boolean;
+  isHumanTurn: boolean;
   onExecutePlay: () => void;
+  onExecuteHumanPlay: (call: HumanPlayCall) => void;
   onSimulateDrive: () => void;
   onSimulateGame: () => void;
   onRollDice: () => void;
+  onSubstitute: (position: string, playerOut: string, playerIn: string) => void;
+  onDownloadGameLog: () => void;
   onNewGame: () => void;
 }
 
 export function GameBoard({
   gameId,
   state,
+  gameMode,
   lastPlay,
   lastDrive,
   lastDice,
+  personnel,
   loading,
+  isHumanTurn,
   onExecutePlay,
+  onExecuteHumanPlay,
   onSimulateDrive,
   onSimulateGame,
   onRollDice,
+  onSubstitute,
+  onDownloadGameLog,
   onNewGame,
 }: GameBoardProps) {
+  const isInteractive = gameMode !== 'solitaire';
+
   return (
     <div className="game-board">
       <div className="board-header">
         <h1 className="board-title">🏈 Statis Pro Football</h1>
-        <button className="btn btn-outline btn-sm" onClick={onNewGame}>
-          New Game
-        </button>
+        <div className="board-header-actions">
+          <span className="mode-badge">
+            {gameMode === 'human_home' ? '🏠 Home' :
+             gameMode === 'human_away' ? '✈️ Away' : '🤖 Sim'}
+          </span>
+          <button className="btn btn-outline btn-sm" onClick={onDownloadGameLog}>
+            📥 Save Log
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={onNewGame}>
+            New Game
+          </button>
+        </div>
       </div>
 
       <Scoreboard state={state} />
 
+      {/* Gridiron field display */}
+      <Gridiron state={state} />
+
       <div className="board-content">
         <div className="board-left">
-          <PlayCaller
-            state={state}
-            loading={loading}
-            onExecutePlay={onExecutePlay}
-            onSimulateDrive={onSimulateDrive}
-            onSimulateGame={onSimulateGame}
-          />
+          {/* Play caller: human or AI mode */}
+          {isInteractive && isHumanTurn ? (
+            <HumanPlayCaller
+              state={state}
+              loading={loading}
+              onCallPlay={onExecuteHumanPlay}
+              onSimulateDrive={onSimulateDrive}
+              onSimulateGame={onSimulateGame}
+              onExecuteAIPlay={onExecutePlay}
+            />
+          ) : (
+            <PlayCaller
+              state={state}
+              loading={loading}
+              onExecutePlay={onExecutePlay}
+              onSimulateDrive={onSimulateDrive}
+              onSimulateGame={onSimulateGame}
+            />
+          )}
+
+          {/* Turn indicator for interactive mode */}
+          {isInteractive && !state.is_over && (
+            <div className={`turn-indicator ${isHumanTurn ? 'your-turn' : 'ai-turn'}`}>
+              {isHumanTurn
+                ? '🎮 YOUR TURN — Call a play!'
+                : '🤖 AI\'s turn — Run AI Play or Sim Drive'}
+            </div>
+          )}
 
           {lastPlay && (
             <div className={`last-play-card ${lastPlay.is_touchdown ? 'play-td' : lastPlay.turnover ? 'play-turnover' : ''}`}>
@@ -79,10 +130,24 @@ export function GameBoard({
             </div>
           )}
 
+          {/* Substitution panel (interactive modes) */}
+          {isInteractive && isHumanTurn && (
+            <SubstitutionPanel
+              personnel={personnel}
+              loading={loading}
+              onSubstitute={onSubstitute}
+            />
+          )}
+
           <DiceRoller lastDice={lastDice} loading={loading} onRoll={onRollDice} />
         </div>
 
         <div className="board-right">
+          {/* Letter boards for offense/defense */}
+          {isInteractive && (
+            <LetterBoards personnel={personnel} possession={state.possession} />
+          )}
+
           <GameLog plays={state.last_plays} />
         </div>
       </div>

@@ -3,32 +3,38 @@ import { useGameEngine } from './hooks/useGameEngine';
 import { TeamSelector } from './components/TeamSelector';
 import { GameBoard } from './components/GameBoard';
 import { CardViewer } from './components/CardViewer';
-import type { GamePhase } from './types/game';
+import type { GamePhase, GameMode } from './types/game';
 import './styles/index.css';
 
 export default function App() {
   const {
     gameId,
     gameState,
+    gameMode,
     lastPlay,
     lastDrive,
     lastDice,
+    personnel,
     loading,
     error,
     startGame,
     executePlay,
+    executeHumanPlay,
     simulateDrive,
     simulateGame,
     rollDice,
+    substitutePlayer,
+    downloadGameLog,
     resetError,
+    isHumanTurn,
   } = useGameEngine();
 
   const [phase, setPhase] = useState<GamePhase>('setup');
   const [activeTab, setActiveTab] = useState<'game' | 'cards'>('game');
   const [cardTeam, setCardTeam] = useState('KC');
 
-  const handleStartGame = async (homeTeam: string, awayTeam: string) => {
-    await startGame(homeTeam, awayTeam);
+  const handleStartGame = async (homeTeam: string, awayTeam: string, mode: GameMode) => {
+    await startGame(homeTeam, awayTeam, mode);
     setPhase('playing');
     setCardTeam(homeTeam);
   };
@@ -75,14 +81,20 @@ export default function App() {
               <GameBoard
                 gameId={gameId}
                 state={gameState}
+                gameMode={gameMode}
                 lastPlay={lastPlay}
                 lastDrive={lastDrive}
                 lastDice={lastDice}
+                personnel={personnel}
                 loading={loading}
+                isHumanTurn={isHumanTurn()}
                 onExecutePlay={executePlay}
+                onExecuteHumanPlay={executeHumanPlay}
                 onSimulateDrive={simulateDrive}
                 onSimulateGame={simulateGame}
                 onRollDice={rollDice}
+                onSubstitute={substitutePlayer}
+                onDownloadGameLog={downloadGameLog}
                 onNewGame={handleNewGame}
               />
             )}
