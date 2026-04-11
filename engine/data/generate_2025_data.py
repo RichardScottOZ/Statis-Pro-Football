@@ -1,4 +1,7 @@
-"""Generate 2025 NFL team data files for Statis Pro Football."""
+"""Generate 2025 NFL team data files for Statis Pro Football.
+
+All player statistics are sourced from the 2024 NFL regular season.
+"""
 import sys
 import os
 import json
@@ -17,47 +20,48 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "2025")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ─── All 32 NFL Teams ─────────────────────────────────────────────────────────
+# offense_rating and defense_rating reflect 2024 season performance
 TEAMS = [
     # AFC East
-    {"abbreviation": "BUF", "city": "Buffalo",      "name": "Bills",     "conference": "AFC", "division": "East",  "offense_rating": 88, "defense_rating": 82},
-    {"abbreviation": "MIA", "city": "Miami",         "name": "Dolphins",  "conference": "AFC", "division": "East",  "offense_rating": 84, "defense_rating": 76},
-    {"abbreviation": "NE",  "city": "New England",   "name": "Patriots",  "conference": "AFC", "division": "East",  "offense_rating": 68, "defense_rating": 72},
-    {"abbreviation": "NYJ", "city": "New York",      "name": "Jets",      "conference": "AFC", "division": "East",  "offense_rating": 72, "defense_rating": 80},
+    {"abbreviation": "BUF", "city": "Buffalo",      "name": "Bills",     "conference": "AFC", "division": "East",  "offense_rating": 87, "defense_rating": 81},
+    {"abbreviation": "MIA", "city": "Miami",         "name": "Dolphins",  "conference": "AFC", "division": "East",  "offense_rating": 78, "defense_rating": 74},
+    {"abbreviation": "NE",  "city": "New England",   "name": "Patriots",  "conference": "AFC", "division": "East",  "offense_rating": 68, "defense_rating": 68},
+    {"abbreviation": "NYJ", "city": "New York",      "name": "Jets",      "conference": "AFC", "division": "East",  "offense_rating": 73, "defense_rating": 77},
     # AFC North
-    {"abbreviation": "BAL", "city": "Baltimore",     "name": "Ravens",    "conference": "AFC", "division": "North", "offense_rating": 90, "defense_rating": 85},
-    {"abbreviation": "CIN", "city": "Cincinnati",    "name": "Bengals",   "conference": "AFC", "division": "North", "offense_rating": 85, "defense_rating": 76},
-    {"abbreviation": "CLE", "city": "Cleveland",     "name": "Browns",    "conference": "AFC", "division": "North", "offense_rating": 73, "defense_rating": 80},
-    {"abbreviation": "PIT", "city": "Pittsburgh",    "name": "Steelers",  "conference": "AFC", "division": "North", "offense_rating": 78, "defense_rating": 84},
+    {"abbreviation": "BAL", "city": "Baltimore",     "name": "Ravens",    "conference": "AFC", "division": "North", "offense_rating": 92, "defense_rating": 84},
+    {"abbreviation": "CIN", "city": "Cincinnati",    "name": "Bengals",   "conference": "AFC", "division": "North", "offense_rating": 89, "defense_rating": 80},
+    {"abbreviation": "CLE", "city": "Cleveland",     "name": "Browns",    "conference": "AFC", "division": "North", "offense_rating": 70, "defense_rating": 76},
+    {"abbreviation": "PIT", "city": "Pittsburgh",    "name": "Steelers",  "conference": "AFC", "division": "North", "offense_rating": 75, "defense_rating": 82},
     # AFC South
-    {"abbreviation": "HOU", "city": "Houston",       "name": "Texans",    "conference": "AFC", "division": "South", "offense_rating": 86, "defense_rating": 80},
-    {"abbreviation": "IND", "city": "Indianapolis",  "name": "Colts",     "conference": "AFC", "division": "South", "offense_rating": 75, "defense_rating": 74},
-    {"abbreviation": "JAX", "city": "Jacksonville",  "name": "Jaguars",   "conference": "AFC", "division": "South", "offense_rating": 74, "defense_rating": 73},
-    {"abbreviation": "TEN", "city": "Tennessee",     "name": "Titans",    "conference": "AFC", "division": "South", "offense_rating": 69, "defense_rating": 70},
+    {"abbreviation": "HOU", "city": "Houston",       "name": "Texans",    "conference": "AFC", "division": "South", "offense_rating": 81, "defense_rating": 83},
+    {"abbreviation": "IND", "city": "Indianapolis",  "name": "Colts",     "conference": "AFC", "division": "South", "offense_rating": 77, "defense_rating": 74},
+    {"abbreviation": "JAX", "city": "Jacksonville",  "name": "Jaguars",   "conference": "AFC", "division": "South", "offense_rating": 74, "defense_rating": 72},
+    {"abbreviation": "TEN", "city": "Tennessee",     "name": "Titans",    "conference": "AFC", "division": "South", "offense_rating": 65, "defense_rating": 70},
     # AFC West
-    {"abbreviation": "DEN", "city": "Denver",        "name": "Broncos",   "conference": "AFC", "division": "West",  "offense_rating": 76, "defense_rating": 78},
-    {"abbreviation": "KC",  "city": "Kansas City",   "name": "Chiefs",    "conference": "AFC", "division": "West",  "offense_rating": 91, "defense_rating": 84},
-    {"abbreviation": "LV",  "city": "Las Vegas",     "name": "Raiders",   "conference": "AFC", "division": "West",  "offense_rating": 71, "defense_rating": 70},
-    {"abbreviation": "LAC", "city": "Los Angeles",   "name": "Chargers",  "conference": "AFC", "division": "West",  "offense_rating": 82, "defense_rating": 79},
+    {"abbreviation": "DEN", "city": "Denver",        "name": "Broncos",   "conference": "AFC", "division": "West",  "offense_rating": 78, "defense_rating": 82},
+    {"abbreviation": "KC",  "city": "Kansas City",   "name": "Chiefs",    "conference": "AFC", "division": "West",  "offense_rating": 88, "defense_rating": 85},
+    {"abbreviation": "LV",  "city": "Las Vegas",     "name": "Raiders",   "conference": "AFC", "division": "West",  "offense_rating": 70, "defense_rating": 70},
+    {"abbreviation": "LAC", "city": "Los Angeles",   "name": "Chargers",  "conference": "AFC", "division": "West",  "offense_rating": 81, "defense_rating": 86},
     # NFC East
-    {"abbreviation": "DAL", "city": "Dallas",        "name": "Cowboys",   "conference": "NFC", "division": "East",  "offense_rating": 84, "defense_rating": 81},
-    {"abbreviation": "NYG", "city": "New York",      "name": "Giants",    "conference": "NFC", "division": "East",  "offense_rating": 67, "defense_rating": 71},
-    {"abbreviation": "PHI", "city": "Philadelphia",  "name": "Eagles",    "conference": "NFC", "division": "East",  "offense_rating": 89, "defense_rating": 84},
-    {"abbreviation": "WAS", "city": "Washington",    "name": "Commanders","conference": "NFC", "division": "East",  "offense_rating": 83, "defense_rating": 78},
+    {"abbreviation": "DAL", "city": "Dallas",        "name": "Cowboys",   "conference": "NFC", "division": "East",  "offense_rating": 76, "defense_rating": 78},
+    {"abbreviation": "NYG", "city": "New York",      "name": "Giants",    "conference": "NFC", "division": "East",  "offense_rating": 68, "defense_rating": 70},
+    {"abbreviation": "PHI", "city": "Philadelphia",  "name": "Eagles",    "conference": "NFC", "division": "East",  "offense_rating": 91, "defense_rating": 88},
+    {"abbreviation": "WAS", "city": "Washington",    "name": "Commanders","conference": "NFC", "division": "East",  "offense_rating": 82, "defense_rating": 76},
     # NFC North
-    {"abbreviation": "CHI", "city": "Chicago",       "name": "Bears",     "conference": "NFC", "division": "North", "offense_rating": 72, "defense_rating": 74},
-    {"abbreviation": "DET", "city": "Detroit",       "name": "Lions",     "conference": "NFC", "division": "North", "offense_rating": 90, "defense_rating": 80},
-    {"abbreviation": "GB",  "city": "Green Bay",     "name": "Packers",   "conference": "NFC", "division": "North", "offense_rating": 83, "defense_rating": 79},
-    {"abbreviation": "MIN", "city": "Minnesota",     "name": "Vikings",   "conference": "NFC", "division": "North", "offense_rating": 87, "defense_rating": 77},
+    {"abbreviation": "CHI", "city": "Chicago",       "name": "Bears",     "conference": "NFC", "division": "North", "offense_rating": 72, "defense_rating": 72},
+    {"abbreviation": "DET", "city": "Detroit",       "name": "Lions",     "conference": "NFC", "division": "North", "offense_rating": 90, "defense_rating": 79},
+    {"abbreviation": "GB",  "city": "Green Bay",     "name": "Packers",   "conference": "NFC", "division": "North", "offense_rating": 82, "defense_rating": 82},
+    {"abbreviation": "MIN", "city": "Minnesota",     "name": "Vikings",   "conference": "NFC", "division": "North", "offense_rating": 85, "defense_rating": 82},
     # NFC South
-    {"abbreviation": "ATL", "city": "Atlanta",       "name": "Falcons",   "conference": "NFC", "division": "South", "offense_rating": 80, "defense_rating": 74},
-    {"abbreviation": "CAR", "city": "Carolina",      "name": "Panthers",  "conference": "NFC", "division": "South", "offense_rating": 65, "defense_rating": 67},
-    {"abbreviation": "NO",  "city": "New Orleans",   "name": "Saints",    "conference": "NFC", "division": "South", "offense_rating": 74, "defense_rating": 76},
-    {"abbreviation": "TB",  "city": "Tampa Bay",     "name": "Buccaneers","conference": "NFC", "division": "South", "offense_rating": 81, "defense_rating": 78},
+    {"abbreviation": "ATL", "city": "Atlanta",       "name": "Falcons",   "conference": "NFC", "division": "South", "offense_rating": 82, "defense_rating": 74},
+    {"abbreviation": "CAR", "city": "Carolina",      "name": "Panthers",  "conference": "NFC", "division": "South", "offense_rating": 66, "defense_rating": 68},
+    {"abbreviation": "NO",  "city": "New Orleans",   "name": "Saints",    "conference": "NFC", "division": "South", "offense_rating": 72, "defense_rating": 72},
+    {"abbreviation": "TB",  "city": "Tampa Bay",     "name": "Buccaneers","conference": "NFC", "division": "South", "offense_rating": 84, "defense_rating": 78},
     # NFC West
-    {"abbreviation": "ARI", "city": "Arizona",       "name": "Cardinals", "conference": "NFC", "division": "West",  "offense_rating": 76, "defense_rating": 73},
-    {"abbreviation": "LAR", "city": "Los Angeles",   "name": "Rams",      "conference": "NFC", "division": "West",  "offense_rating": 82, "defense_rating": 79},
-    {"abbreviation": "SF",  "city": "San Francisco", "name": "49ers",     "conference": "NFC", "division": "West",  "offense_rating": 87, "defense_rating": 86},
-    {"abbreviation": "SEA", "city": "Seattle",       "name": "Seahawks",  "conference": "NFC", "division": "West",  "offense_rating": 79, "defense_rating": 76},
+    {"abbreviation": "ARI", "city": "Arizona",       "name": "Cardinals", "conference": "NFC", "division": "West",  "offense_rating": 76, "defense_rating": 70},
+    {"abbreviation": "LAR", "city": "Los Angeles",   "name": "Rams",      "conference": "NFC", "division": "West",  "offense_rating": 78, "defense_rating": 76},
+    {"abbreviation": "SF",  "city": "San Francisco", "name": "49ers",     "conference": "NFC", "division": "West",  "offense_rating": 86, "defense_rating": 84},
+    {"abbreviation": "SEA", "city": "Seattle",       "name": "Seahawks",  "conference": "NFC", "division": "West",  "offense_rating": 79, "defense_rating": 77},
 ]
 
 # ─── Per-team key player data ────────────────────────────────────────────────
