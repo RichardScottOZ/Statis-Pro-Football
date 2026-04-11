@@ -1,18 +1,33 @@
-"""Play resolution engine for Statis Pro Football.
+"""Play resolution engine for Statis Pro Football (5th Edition).
 
-Implements the two-stage FAC resolution system:
-  Pass plays:  PN → QB card → result ; if COMPLETE → RN → Receiver card → yards
-  Run plays:   RN → RB card → result (with OOB support)
-  Punt plays:  RN → Punter card column (slot-based)
+Implements the FAC-card-driven resolution system:
+
+  Pass plays (5th edition):
+    1. Draw FAC card
+    2. Check ER field for sack
+    3. Check receiver target field (QK/SH/LG) for override
+    4. PN → QB card → receiver letter / INC / INT
+    5. If receiver letter → same PN → Receiver card → yards
+    6. Screen uses FAC card SC field directly
+
+  Run plays (5th edition):
+    1. Draw FAC card
+    2. RUN# → RB card → yards / FUMBLE / BREAKAWAY
+    3. FAC blocking matchup fields determine context
+    4. OB suffix on RUN# means out-of-bounds
+
+  Legacy (pre-5th-ed) resolution still supported via the old resolve_*
+  methods when DiceResult objects are passed.
 
 Defence ratings (pass_rush, coverage, run_stop) are wired into
 resolution via effective_* helpers from ``fac_distributions``.
 """
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from .player_card import PlayerCard
 from .fast_action_dice import DiceResult, PlayTendency
+from .fac_deck import FACCard, FACDeck
 from .charts import Charts
 from .fac_distributions import (
     effective_pass_rush, effective_coverage, effective_run_stop,
@@ -441,4 +456,454 @@ class PlayResolver:
             yards_gained=return_yards,
             result="RETURN",
             description=f"Kickoff returned {return_yards} yards",
+        )
+
+    # ══════════════════════════════════════════════════════════════════
+    #  5th-EDITION  FAC-CARD  RESOLUTION METHODS
+    # ══════════════════════════════════════════════════════════════════
+
+    def _resolve_z_card(self, deck: FACDeck) -> Optional[Dict[str, Any]]:
+        """Resolve a Z-card event by drawing the next non-Z card."""
+        next_card = deck.draw_non_z()
+        z_info = next_card.parse_z_result()
+        if z_info["type"] == "NONE":
+            return None
+        return z_info
+
+    def _find_receiver_by_letter(self, letter: str,
+                                 receivers: List[PlayerCard]) -> Optional[PlayerCard]:
+        """Find a receiver card matching the given letter (A-E)."""
+        for rec in receivers:
+            if rec.receiver_letter == letter:
+                return rec
+        # If not found, fall back to positional order
+        letter_index = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
+        idx = letter_index.get(letter, 0)
+        if idx < len(receivers):
+            return receivers[idx]
+        return receivers[0] if receivers else None
+
+    def _resolve_receiver_target(self, fac_card: FACCard,
+                                 pass_type: str,
+                                 default_receiver: PlayerCard,
+                                 receivers: List[PlayerCard]) -> PlayerCard:
+        """Determine which receiver is targeted based on FAC card field."""
+        target = fac_card.get_receiver_target(pass_type)
+        if target in ("Orig", "Z"):
+            return default_receiver
+        if target == "P.Rush":
+            return default_receiver  # caller handles P.Rush as sack
+        # Target is a position code: FL, LE, RE, BK1, BK2, etc.
+        target_map = {"FL": 0, "LE": 1, "RE": 2, "BK1": 3, "BK2": 4}
+        idx = target_map.get(target, 0)
+        if idx < len(receivers):
+            return receivers[idx]
+        return default_receiver
+
+    def resolve_pass_5e(self, fac_card: FACCard, deck: FACDeck,
+                        qb: PlayerCard, receiver: PlayerCard,
+                        receivers: List[PlayerCard],
+                        pass_type: str = "SHORT",
+                        defense_coverage: int = 50,
+                        defense_pass_rush: int = 50,
+                        defense_formation: str = "4_3",
+                        is_blitz_tendency: bool = False) -> PlayResult:
+        """Resolve a pass play using 5th-edition FAC card mechanics.
+
+        Parameters
+        ----------
+        fac_card : FACCard
+            The drawn FAC card for this play.
+        deck : FACDeck
+            The deck (needed for Z-card resolution).
+        qb : PlayerCard
+            Quarterback's card.
+        receiver : PlayerCard
+            Default receiver for this play.
+        receivers : List[PlayerCard]
+            All available receivers (WRs + TEs).
+        pass_type : str
+            "SHORT", "LONG", "QUICK", or "SCREEN".
+        """
+        # ── Handle Z card ────────────────────────────────────────────
+        if fac_card.is_z_card:
+            z_event = self._resolve_z_card(deck)
+            # On a Z card, draw the next card and use it for the play
+            fac_card = deck.draw_non_z()
+            return self._resolve_pass_inner_5e(
+                fac_card, deck, qb, receiver, receivers, pass_type,
+                defense_coverage, defense_pass_rush, defense_formation,
+                is_blitz_tendency, z_event,
+            )
+
+        return self._resolve_pass_inner_5e(
+            fac_card, deck, qb, receiver, receivers, pass_type,
+            defense_coverage, defense_pass_rush, defense_formation,
+            is_blitz_tendency, None,
+        )
+
+    def _resolve_pass_inner_5e(self, fac_card: FACCard, deck: FACDeck,
+                               qb: PlayerCard, receiver: PlayerCard,
+                               receivers: List[PlayerCard],
+                               pass_type: str,
+                               defense_coverage: int,
+                               defense_pass_rush: int,
+                               defense_formation: str,
+                               is_blitz_tendency: bool,
+                               z_event: Optional[Dict[str, Any]]) -> PlayResult:
+        """Inner pass resolution after Z-card handling."""
+
+        # ── Step 1: Check ER (pass rush / sack) ─────────────────────
+        sack_yards = fac_card.sack_yards
+        if sack_yards is not None:
+            return PlayResult(
+                play_type="PASS", yards_gained=sack_yards,
+                result="SACK",
+                description=f"{qb.player_name} is sacked for {abs(sack_yards)} yard loss!",
+                passer=qb.player_name, z_card_event=z_event,
+            )
+
+        # ── Step 1b: Check receiver target for P.Rush ────────────────
+        target_field = fac_card.get_receiver_target(pass_type)
+        if target_field == "P.Rush":
+            loss = random.choice([-3, -4, -5, -6])
+            return PlayResult(
+                play_type="PASS", yards_gained=loss,
+                result="SACK",
+                description=f"{qb.player_name} sacked on pass rush! {abs(loss)} yard loss.",
+                passer=qb.player_name, z_card_event=z_event,
+            )
+
+        # ── Step 2: Screen pass — use FAC SC field directly ──────────
+        if pass_type == "SCREEN":
+            return self._resolve_screen_5e(fac_card, qb, receiver, z_event)
+
+        # ── Step 3: Determine actual receiver target ─────────────────
+        actual_receiver = self._resolve_receiver_target(
+            fac_card, pass_type, receiver, receivers,
+        )
+
+        # ── Step 4: PN → QB card → result ────────────────────────────
+        pn = fac_card.pass_number  # string "1"-"48"
+        if pass_type == "LONG":
+            qb_column = qb.long_pass
+        elif pass_type == "QUICK":
+            qb_column = qb.quick_pass if qb.quick_pass else qb.short_pass
+        else:
+            qb_column = qb.short_pass
+
+        if not qb_column:
+            # Fallback: random pass result
+            comp = random.random() < 0.62
+            if comp:
+                yards = random.randint(5, 15)
+                return PlayResult(
+                    play_type="PASS", yards_gained=yards, result="COMPLETE",
+                    description=f"{qb.player_name} completes to {actual_receiver.player_name} for {yards} yards",
+                    passer=qb.player_name, receiver=actual_receiver.player_name,
+                    z_card_event=z_event,
+                )
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"{qb.player_name} pass incomplete to {actual_receiver.player_name}",
+                passer=qb.player_name, receiver=actual_receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        qb_data = qb_column.get(pn, {"result": "INC", "yards": 0, "td": False})
+        qb_result = qb_data.get("result", "INC")
+
+        # ── INT result ───────────────────────────────────────────────
+        if qb_result == "INT":
+            int_yards, int_td = Charts.roll_int_return()
+            return PlayResult(
+                play_type="PASS", yards_gained=0,
+                result="INT", turnover=True, turnover_type="INT",
+                description=(
+                    f"{qb.player_name} pass intercepted!"
+                    f"{'Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
+                ),
+                passer=qb.player_name, receiver=actual_receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        # ── INC result ───────────────────────────────────────────────
+        if qb_result == "INC":
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"{qb.player_name} pass incomplete to {actual_receiver.player_name}",
+                passer=qb.player_name, receiver=actual_receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        # ── Receiver letter (A-E) — proceed to Stage 2 ──────────────
+        target_receiver = self._find_receiver_by_letter(qb_result, receivers)
+        if target_receiver is None:
+            target_receiver = actual_receiver
+
+        # Stage 2: same PN on receiver's card
+        if pass_type == "LONG":
+            rec_column = target_receiver.long_reception
+        else:
+            rec_column = target_receiver.short_reception
+
+        if not rec_column:
+            # Fallback
+            yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
+            is_td = random.random() < 0.05
+            return PlayResult(
+                play_type="PASS", yards_gained=yards,
+                result="TD" if is_td else "COMPLETE",
+                is_touchdown=is_td,
+                description=f"{qb.player_name} completes to {target_receiver.player_name} for {yards} yards{'TOUCHDOWN!' if is_td else ''}",
+                passer=qb.player_name, receiver=target_receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        rec_data = rec_column.get(pn, {"result": "CATCH", "yards": 8, "td": False})
+        rec_result = rec_data.get("result", "CATCH")
+
+        if rec_result in ("INC", "INCOMPLETE"):
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"{qb.player_name} pass dropped by {target_receiver.player_name}",
+                passer=qb.player_name, receiver=target_receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        yards = rec_data.get("yards", 0)
+        is_td = rec_data.get("td", False)
+
+        # Coverage modifier
+        eff_cov = effective_coverage(defense_coverage, defense_formation, is_blitz_tendency)
+        cov_modifier = (eff_cov - 50) / 200.0
+        if cov_modifier > 0:
+            yards = max(0, int(yards * (1 - cov_modifier)))
+
+        if is_td:
+            desc = f"{qb.player_name} completes to {target_receiver.player_name} for a TOUCHDOWN!"
+        else:
+            desc = f"{qb.player_name} completes to {target_receiver.player_name} for {yards} yard{'s' if yards != 1 else ''}"
+
+        return PlayResult(
+            play_type="PASS", yards_gained=yards,
+            result="TD" if is_td else "COMPLETE",
+            is_touchdown=is_td,
+            description=desc,
+            passer=qb.player_name, receiver=target_receiver.player_name,
+            z_card_event=z_event,
+        )
+
+    def _resolve_screen_5e(self, fac_card: FACCard, qb: PlayerCard,
+                           receiver: PlayerCard,
+                           z_event: Optional[Dict[str, Any]]) -> PlayResult:
+        """Resolve a screen pass using the FAC card's SC field."""
+        sc_result = fac_card.screen_result
+
+        if sc_result == "Inc":
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"{qb.player_name} screen pass to {receiver.player_name} - incomplete",
+                passer=qb.player_name, receiver=receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        if sc_result == "Int":
+            int_yards, int_td = Charts.roll_int_return()
+            return PlayResult(
+                play_type="PASS", yards_gained=0,
+                result="INT", turnover=True, turnover_type="INT",
+                description=f"{qb.player_name} screen pass intercepted!",
+                passer=qb.player_name, receiver=receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        # Screen complete — base yards
+        base_yards = random.randint(3, 10)
+        multiplier = 1.0
+
+        if sc_result.startswith("Com x"):
+            try:
+                mult_str = sc_result.split("x")[-1].strip()
+                if "½" in mult_str:
+                    multiplier = 0.5
+                elif "/" in mult_str:
+                    # Handle fractions like "1/2"
+                    num, den = mult_str.split("/")
+                    multiplier = float(num) / float(den)
+                else:
+                    multiplier = float(mult_str)
+            except (ValueError, ZeroDivisionError):
+                multiplier = 1.0
+        elif sc_result == "Dropped Int":
+            # Dropped interception → treat as incomplete
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"{qb.player_name} screen pass nearly intercepted - dropped!",
+                passer=qb.player_name, receiver=receiver.player_name,
+                z_card_event=z_event,
+            )
+
+        yards = max(0, int(base_yards * multiplier))
+        is_td = random.random() < 0.03
+
+        if is_td:
+            desc = f"{qb.player_name} screen pass to {receiver.player_name} for a TOUCHDOWN!"
+        else:
+            desc = f"{qb.player_name} screen pass to {receiver.player_name} for {yards} yards"
+
+        return PlayResult(
+            play_type="PASS", yards_gained=yards,
+            result="TD" if is_td else "COMPLETE",
+            is_touchdown=is_td,
+            description=desc,
+            passer=qb.player_name, receiver=receiver.player_name,
+            z_card_event=z_event,
+        )
+
+    def resolve_run_5e(self, fac_card: FACCard, deck: FACDeck,
+                       rusher: PlayerCard,
+                       play_direction: str = "IL",
+                       defense_run_stop: int = 50,
+                       defense_formation: str = "4_3") -> PlayResult:
+        """Resolve a run play using 5th-edition FAC card mechanics.
+
+        Parameters
+        ----------
+        fac_card : FACCard
+            The drawn FAC card.
+        deck : FACDeck
+            The deck (for Z-card resolution).
+        rusher : PlayerCard
+            The ball carrier's card.
+        play_direction : str
+            "SL" (sweep left), "IL" (inside left),
+            "SR" (sweep right), "IR" (inside right).
+        """
+        z_event = None
+
+        # ── Handle Z card ────────────────────────────────────────────
+        if fac_card.is_z_card:
+            z_event = self._resolve_z_card(deck)
+            fac_card = deck.draw_non_z()
+
+        # ── Determine run number and OOB ─────────────────────────────
+        run_num = fac_card.run_num_int
+        is_oob = fac_card.is_out_of_bounds
+        rn_str = str(run_num) if run_num is not None else "1"
+
+        # Effective run-stop
+        eff_run_stop = effective_run_stop(defense_run_stop, defense_formation)
+
+        # ── Select column based on direction ─────────────────────────
+        if play_direction in ("SL", "SR"):
+            column = rusher.sweep if rusher.sweep else rusher.outside_run
+        elif play_direction in ("IL", "IR"):
+            column = rusher.inside_run
+        elif play_direction in ("LEFT", "MIDDLE"):
+            column = rusher.inside_run
+        else:
+            column = rusher.outside_run
+
+        if not column:
+            yards = random.choices([-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+                                   weights=[2, 3, 5, 8, 10, 12, 12, 10, 8, 5, 3])[0]
+            return PlayResult(
+                play_type="RUN", yards_gained=yards, result="GAIN",
+                description=f"{rusher.player_name} runs for {yards} yards",
+                rusher=rusher.player_name, z_card_event=z_event,
+            )
+
+        play_data = column.get(rn_str, {"result": "GAIN", "yards": 2, "td": False})
+        result_type = play_data.get("result", "GAIN")
+        yards = play_data.get("yards", 0)
+        is_td = play_data.get("td", False)
+
+        # Defense run-stop modifier
+        def_modifier = (eff_run_stop - 50) / 100.0
+        if result_type in ("GAIN", "BREAKAWAY"):
+            yards = max(-5, int(yards - def_modifier * 2))
+            if eff_run_stop >= 80 and random.random() < (eff_run_stop - 75) / 100.0:
+                yards = min(yards, random.choice([-2, -1, 0]))
+            if eff_run_stop >= 85 and result_type == "GAIN" and random.random() < 0.03:
+                result_type = "FUMBLE"
+
+        # ── Out of bounds ────────────────────────────────────────────
+        if is_oob:
+            desc = f"{rusher.player_name} runs {play_direction} for {yards} yards, out of bounds"
+            return PlayResult(
+                play_type="RUN", yards_gained=yards,
+                result="OOB", out_of_bounds=True,
+                description=desc, rusher=rusher.player_name,
+                z_card_event=z_event,
+            )
+
+        # ── Fumble ───────────────────────────────────────────────────
+        if result_type == "FUMBLE":
+            recovery = Charts.roll_fumble_recovery()
+            fumble_yards, fumble_td = Charts.roll_fumble_return()
+            is_turnover = recovery == "DEFENSE"
+            if is_turnover and fumble_td:
+                return PlayResult(
+                    play_type="RUN", yards_gained=-fumble_yards,
+                    result="FUMBLE_TD", is_touchdown=False,
+                    turnover=True, turnover_type="FUMBLE",
+                    description=f"{rusher.player_name} fumbles! Returned for TD!",
+                    rusher=rusher.player_name, z_card_event=z_event,
+                )
+            return PlayResult(
+                play_type="RUN", yards_gained=yards,
+                result="FUMBLE", turnover=is_turnover,
+                turnover_type="FUMBLE" if is_turnover else None,
+                description=(
+                    f"{rusher.player_name} fumbles! "
+                    f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
+                ),
+                rusher=rusher.player_name, z_card_event=z_event,
+            )
+
+        # ── Breakaway ────────────────────────────────────────────────
+        if result_type == "BREAKAWAY":
+            is_td = is_td or random.random() < 0.2
+            desc = f"{rusher.player_name} breaks free for {yards} yards!"
+            if is_td:
+                desc += " TOUCHDOWN!"
+            return PlayResult(
+                play_type="RUN", yards_gained=yards,
+                result="TD" if is_td else "GAIN",
+                is_touchdown=is_td,
+                description=desc,
+                rusher=rusher.player_name, z_card_event=z_event,
+            )
+
+        # ── Normal gain ──────────────────────────────────────────────
+        # Check Z RES on the card for additional effects
+        z_res_info = fac_card.parse_z_result()
+        if z_res_info["type"] == "FUMBLE" and random.random() < 0.5:
+            recovery = Charts.roll_fumble_recovery()
+            is_turnover = recovery == "DEFENSE"
+            return PlayResult(
+                play_type="RUN", yards_gained=yards,
+                result="FUMBLE", turnover=is_turnover,
+                turnover_type="FUMBLE" if is_turnover else None,
+                description=(
+                    f"{rusher.player_name} fumbles at the end of the run! "
+                    f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
+                ),
+                rusher=rusher.player_name, z_card_event=z_event,
+            )
+
+        desc = f"{rusher.player_name} runs {play_direction}"
+        if is_td:
+            desc += " for a TOUCHDOWN!"
+        else:
+            desc += f" for {yards} yard{'s' if yards != 1 else ''}"
+
+        return PlayResult(
+            play_type="RUN", yards_gained=yards,
+            result="TD" if is_td else "GAIN",
+            is_touchdown=is_td,
+            description=desc,
+            rusher=rusher.player_name,
+            z_card_event=z_event,
         )
