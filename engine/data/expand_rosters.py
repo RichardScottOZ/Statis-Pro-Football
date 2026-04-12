@@ -383,15 +383,23 @@ def _backup_te_stats(tier):
     return {"catch_rate": cr, "avg_yards": ay}
 
 def _backup_ol_stats():
-    return {"run_block": random.randint(58, 70), "pass_block": random.randint(56, 68)}
+    """Backup OL stats in authentic 5E BV scale (-1 to +4 run, 0 to +3 pass)."""
+    return {"run_block": random.randint(0, 2), "pass_block": random.randint(0, 1)}
 
 def _backup_def_stats(pos):
+    """Backup defensive stats in authentic 5E small-number scale."""
     if pos in ("DE", "DT"):
-        return {"pass_rush": random.randint(48, 70), "coverage": random.randint(35, 48), "run_stop": random.randint(55, 72)}
+        return {"pass_rush": random.randint(0, 1), "coverage": 0, "run_stop": random.randint(-1, 1),
+                "sacks": random.randint(0, 3), "interceptions": 0,
+                "pass_defense_pts": 0, "tackle_pts": random.randint(-1, 1)}
     elif pos == "LB":
-        return {"pass_rush": random.randint(42, 62), "coverage": random.randint(45, 65), "run_stop": random.randint(55, 72)}
+        return {"pass_rush": random.randint(0, 1), "coverage": 0, "run_stop": 0,
+                "sacks": random.randint(0, 2), "interceptions": random.randint(0, 2),
+                "pass_defense_pts": random.randint(-2, 0), "tackle_pts": random.randint(-1, 1)}
     else:  # CB, S
-        return {"pass_rush": random.randint(35, 50), "coverage": random.randint(55, 75), "run_stop": random.randint(48, 65)}
+        return {"pass_rush": 0, "coverage": 0, "run_stop": 0,
+                "sacks": random.randint(0, 1), "interceptions": random.randint(0, 3),
+                "pass_defense_pts": random.randint(-2, 1), "tackle_pts": 0}
 
 
 OL_POSITIONS = ["LT", "LG", "C", "RG", "RT", "LT", "LG", "C"]  # cycle for backups
@@ -533,7 +541,7 @@ def _make_player(name, position, number, team, grade, stats):
         "fg_chart": {}, "xp_rate": 0.95,
         "avg_distance": 44.0, "inside_20_rate": 0.35,
         "run_block_rating": 0, "pass_block_rating": 0,
-        "pass_rush_rating": 50, "coverage_rating": 50, "run_stop_rating": 50,
+        "pass_rush_rating": 0, "coverage_rating": 0, "run_stop_rating": 0,
         "tackle_rating": 0, "pass_defense_rating": 0, "intercept_range": 0,
         "defender_letter": "",
         "stats_summary": stats,
@@ -553,9 +561,13 @@ def _make_ol_player(name, position, number, team, grade, stats):
 
 def _make_def_player(name, position, number, team, grade, stats):
     p = _make_player(name, position, number, team, grade, stats)
-    p["pass_rush_rating"] = stats["pass_rush"]
-    p["coverage_rating"] = stats["coverage"]
-    p["run_stop_rating"] = stats["run_stop"]
+    p["pass_rush_rating"] = stats.get("pass_rush", 0)
+    p["coverage_rating"] = stats.get("coverage", 0)
+    p["run_stop_rating"] = stats.get("run_stop", 0)
+    # 5E-specific fields
+    p["tackle_rating"] = stats.get("tackle_pts", 0)
+    p["pass_defense_rating"] = stats.get("pass_defense_pts", 0)
+    p["intercept_range"] = 0  # Will be set by generate_def_card_5e
     return p
 
 
@@ -630,23 +642,39 @@ def upgrade_to_5e(team_data: dict) -> dict:
         elif pos in ("P",):
             new_players.append(p)
         elif pos in ("LT", "LG", "C", "RG", "RT", "OL"):
+            # Convert legacy 0-100 to 5E BV scale if values are large
+            rb = stats.get("run_block_rating", p.get("run_block_rating", 2))
+            pb = stats.get("pass_block_rating", p.get("pass_block_rating", 1))
+            if rb > 10:  # Legacy 0-100 scale, convert
+                from engine.card_generator import _legacy_ol_run_block_to_5e, _legacy_ol_pass_block_to_5e
+                rb = _legacy_ol_run_block_to_5e(rb)
+                pb = _legacy_ol_pass_block_to_5e(pb)
             card = gen.generate_ol_card(
                 name=p["name"], team=abbr, number=p["number"],
                 position=pos, grade=grade,
-                run_block=stats.get("run_block_rating", p.get("run_block_rating", 65)),
-                pass_block=stats.get("pass_block_rating", p.get("pass_block_rating", 63)),
+                run_block=rb, pass_block=pb,
             )
             new_players.append(card.to_dict())
         elif pos in ("DL", "DE", "DT", "NT", "LB", "CB", "S", "SS", "FS", "DEF"):
             letter = DEFENDER_LETTERS[defender_idx] if defender_idx < len(DEFENDER_LETTERS) else ""
             defender_idx += 1
+            pr = stats.get("pass_rush_rating", p.get("pass_rush_rating", 0))
+            cov = stats.get("coverage_rating", p.get("coverage_rating", 0))
+            rs = stats.get("run_stop_rating", p.get("run_stop_rating", 0))
+            # Detect legacy 0-100 values and convert via legacy path
+            sacks = stats.get("sacks", 0)
+            ints = stats.get("interceptions", 0)
+            pd_pts = stats.get("pass_defense_pts", 0)
+            tk_pts = stats.get("tackle_pts", 0)
+            # If values are still in legacy 0-100 range, they'll be auto-converted
+            # by generate_def_card_5e's legacy fallback
             card = gen.generate_def_card_5e(
                 name=p["name"], team=abbr, number=p["number"],
                 position=pos, grade=grade,
-                pass_rush=stats.get("pass_rush_rating", p.get("pass_rush_rating", 50)),
-                coverage=stats.get("coverage_rating", p.get("coverage_rating", 50)),
-                run_stop=stats.get("run_stop_rating", p.get("run_stop_rating", 50)),
+                pass_rush=pr, coverage=cov, run_stop=rs,
                 defender_letter=letter,
+                sacks=sacks, interceptions=ints,
+                pass_defense_pts=pd_pts, tackle_pts=tk_pts,
             )
             new_players.append(card.to_dict())
         else:

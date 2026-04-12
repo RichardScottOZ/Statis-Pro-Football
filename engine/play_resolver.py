@@ -1446,11 +1446,11 @@ class PlayResolver:
             yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
             is_td = random.random() < 0.05
 
-        # Coverage modifier
+        # Coverage modifier (5E: pass_defense is small number -5 to +5)
+        # Negative = good defense (reduces yards), positive = bad
         eff_cov = effective_coverage(defense_coverage, defense_formation, is_blitz_tendency)
-        cov_modifier = (eff_cov - 50) / 200.0
-        if cov_modifier > 0 and isinstance(yards, int):
-            yards = max(0, int(yards * (1 - cov_modifier)))
+        if eff_cov < 0 and isinstance(yards, int):
+            yards = max(0, yards + eff_cov)  # Reduce yards by defensive coverage
 
         # Rule 10: If pass yards would go past end zone, it's a TD
         # (yard_line not passed to this method, so this is handled by callers
@@ -1651,16 +1651,14 @@ class PlayResolver:
                     except (ValueError, TypeError):
                         yards = random.randint(1, 5)
 
-            # Defense run-stop modifier
-            def_modifier = (eff_run_stop - 50) / 100.0
-            yards = max(-5, int(yards - def_modifier * 2))
-            if eff_run_stop >= 80 and random.random() < (eff_run_stop - 75) / 100.0:
-                yards = min(yards, random.choice([-2, -1, 0]))
+            # Defense run-stop modifier (5E: TV is small number -4 to +4)
+            # Negative TV = good defense (reduces yards), positive = bad
+            yards = max(-5, yards + eff_run_stop)
 
             # 5E Rule: Inside run max loss = 3 yards; no limit on sweep
             yards = self.apply_inside_run_max_loss(yards, play_direction)
 
-            if eff_run_stop >= 85 and random.random() < 0.03:
+            if eff_run_stop <= -3 and random.random() < 0.03:
                 recovery = Charts.roll_fumble_recovery()
                 fumble_yards, fumble_td = Charts.roll_fumble_return()
                 is_turnover = recovery == "DEFENSE"

@@ -51,6 +51,163 @@ def _pick_yards(pool: List[int], weights: List[int]) -> int:
     return random.choices(pool, weights=weights)[0]
 
 
+# ── 5E rating conversion helpers ─────────────────────────────────────
+
+def _sacks_to_pass_rush(sacks: int) -> int:
+    """Convert sack count to 5E Pass Rush Rating (0-3).
+
+    Per player-card-creation.md Page 4:
+      6+ sacks → 3, 4-5 → 2, 2-3 → 1, 0-1 → 0
+    """
+    if sacks >= 6:
+        return 3
+    elif sacks >= 4:
+        return 2
+    elif sacks >= 2:
+        return 1
+    return 0
+
+
+def _legacy_pass_rush_to_5e(pr_100: int) -> int:
+    """Convert legacy 0-100 pass rush to 5E 0-3 scale."""
+    if pr_100 >= 85:
+        return 3
+    elif pr_100 >= 70:
+        return 2
+    elif pr_100 >= 55:
+        return 1
+    return 0
+
+
+def _interceptions_to_range(ints: int) -> int:
+    """Convert interception count to 5E Intercept Range (low PN bound).
+
+    Per player-card-creation.md Page 5:
+      0-1 INT → 48 (only), 2 → 48, 3 → 47, 4 → 46, 5 → 45,
+      6 → 44, 7 → 43, 8 → 42, 9 → 41, 10 → 38, 11 → 37, 12+ → 35
+    Returns 0 for no intercept ability (0-1 INT returns 49 which means
+    only PN=48 triggers, stored as 48).
+    """
+    table = {
+        0: 0, 1: 0, 2: 48, 3: 47, 4: 46, 5: 45,
+        6: 44, 7: 43, 8: 42, 9: 41, 10: 38, 11: 37,
+    }
+    if ints >= 12:
+        return 35
+    return table.get(ints, 0)
+
+
+def _legacy_coverage_to_intercept(cov_100: int, position: str) -> int:
+    """Convert legacy 0-100 coverage to 5E intercept range."""
+    pos = position.upper()
+    if pos in ("CB", "S", "SS", "FS", "DB"):
+        # DBs: better intercept ability
+        if cov_100 >= 90:
+            return 38   # ~10 INTs
+        elif cov_100 >= 80:
+            return 42   # ~8 INTs
+        elif cov_100 >= 70:
+            return 44   # ~6 INTs
+        elif cov_100 >= 60:
+            return 46   # ~4 INTs
+        elif cov_100 >= 50:
+            return 47   # ~3 INTs
+        return 0
+    elif pos in ("LB", "OLB", "ILB", "MLB"):
+        if cov_100 >= 75:
+            return 46   # ~4 INTs
+        elif cov_100 >= 65:
+            return 47   # ~3 INTs
+        elif cov_100 >= 55:
+            return 48   # ~2 INTs
+        return 0
+    return 0
+
+
+def _legacy_coverage_to_pass_defense(cov_100: int, position: str) -> int:
+    """Convert legacy 0-100 coverage to 5E pass defense points.
+
+    5E pass defense is a small number (-5 to +5) distributed from team total.
+    """
+    pos = position.upper()
+    if pos in ("CB", "S", "SS", "FS", "DB"):
+        # Map 0-100 → roughly -3 to +3
+        if cov_100 >= 90:
+            return 3
+        elif cov_100 >= 80:
+            return 2
+        elif cov_100 >= 70:
+            return 1
+        elif cov_100 >= 60:
+            return 0
+        elif cov_100 >= 50:
+            return -1
+        elif cov_100 >= 40:
+            return -2
+        return -3
+    elif pos in ("LB", "OLB", "ILB", "MLB"):
+        if cov_100 >= 80:
+            return 2
+        elif cov_100 >= 70:
+            return 1
+        elif cov_100 >= 60:
+            return 0
+        elif cov_100 >= 50:
+            return -1
+        elif cov_100 >= 40:
+            return -2
+        return -3
+    return 0
+
+
+def _legacy_run_stop_to_tackle(rs_100: int) -> int:
+    """Convert legacy 0-100 run stop to 5E Tackle Value.
+
+    5E TV is a small number (-4 to +4).
+    """
+    if rs_100 >= 90:
+        return -4
+    elif rs_100 >= 82:
+        return -3
+    elif rs_100 >= 74:
+        return -2
+    elif rs_100 >= 66:
+        return -1
+    elif rs_100 >= 58:
+        return 0
+    elif rs_100 >= 50:
+        return 1
+    elif rs_100 >= 42:
+        return 2
+    return 3
+
+
+def _legacy_ol_run_block_to_5e(rb_100: int) -> int:
+    """Convert legacy 0-100 OL run block to 5E BV scale (-1 to +4)."""
+    if rb_100 >= 90:
+        return 4
+    elif rb_100 >= 82:
+        return 3
+    elif rb_100 >= 72:
+        return 2
+    elif rb_100 >= 62:
+        return 1
+    elif rb_100 >= 52:
+        return 0
+    return -1
+
+
+def _legacy_ol_pass_block_to_5e(pb_100: int) -> int:
+    """Convert legacy 0-100 OL pass block to 5E PBV scale (0 to +3)."""
+    if pb_100 >= 88:
+        return 3
+    elif pb_100 >= 75:
+        return 2
+    elif pb_100 >= 60:
+        return 1
+    return 0
+
+
 # ── QB columns ───────────────────────────────────────────────────────
 
 def _make_qb_short_pass(comp_pct: float, int_pct: float,
@@ -394,46 +551,86 @@ class CardGenerator:
 
     def generate_def_card_5e(self, name: str, team: str, number: int, position: str,
                              pass_rush: int, coverage: int, run_stop: int, grade: str,
-                             defender_letter: str = "") -> PlayerCard:
-        """Generate a 5th-edition defensive player card with authentic stats.
+                             defender_letter: str = "",
+                             sacks: int = 0, interceptions: int = 0,
+                             pass_defense_pts: int = 0, tackle_pts: int = 0) -> PlayerCard:
+        """Generate a 5th-edition defensive player card with authentic small-number stats.
 
         Authentic 5E defensive ratings by position group:
-          DL (DE/DT): tackle_rating, pass_rush_rating
-          LB:         pass_defense_rating, tackle_rating, pass_rush_rating, intercept_range
-          DB (CB/S):  pass_defense_rating, pass_rush_rating, intercept_range (no tackle)
+          DL (DE/DT): tackle_rating (-4 to +4), pass_rush_rating (0-3)
+          LB:         pass_defense_rating (-5 to +3), tackle_rating (-5 to +4),
+                      pass_rush_rating (0-3), intercept_range (0 or 35-48 low bound)
+          DB (CB/S):  pass_defense_rating (-5 to +5), pass_rush_rating (0-3),
+                      intercept_range (0 or 35-48 low bound)
+
+        New parameters (preferred):
+          sacks: player's sack count → maps to pass_rush 0-3
+          interceptions: player's INT count → maps to intercept_range
+          pass_defense_pts: pre-calculated pass defense points for this player
+          tackle_pts: pre-calculated tackle value for this player
+
+        Legacy parameters (still accepted for backward compat):
+          pass_rush: if sacks=0, this 0-100 value is converted to 0-3
+          coverage: if pass_defense_pts=0, this 0-100 value is converted
+          run_stop: if tackle_pts=0, this 0-100 value is converted
         """
         card = PlayerCard(
             player_name=name, team=team, position=position,
             number=number, overall_grade=grade,
         )
-        # Legacy fields (kept for backward compat)
-        card.pass_rush_rating = pass_rush
-        card.coverage_rating = coverage
-        card.run_stop_rating = run_stop
         card.defender_letter = defender_letter
+
+        # ── Pass Rush Rating (0-3) from sacks ────────────────────────
+        if sacks > 0 or pass_rush == 0:
+            pr = _sacks_to_pass_rush(sacks)
+        else:
+            # Convert legacy 0-100 → 0-3
+            pr = _legacy_pass_rush_to_5e(pass_rush)
+
+        # ── Intercept Range from interceptions ───────────────────────
+        if interceptions > 0:
+            ir = _interceptions_to_range(interceptions)
+        else:
+            # Convert legacy coverage 0-100 → intercept range
+            ir = _legacy_coverage_to_intercept(coverage, position)
+
+        # ── Tackle Value from table or legacy ────────────────────────
+        if tackle_pts != 0:
+            tv = tackle_pts
+        else:
+            tv = _legacy_run_stop_to_tackle(run_stop)
+
+        # ── Pass Defense from points or legacy ───────────────────────
+        if pass_defense_pts != 0:
+            pd = pass_defense_pts
+        else:
+            pd = _legacy_coverage_to_pass_defense(coverage, position)
+
+        # Store legacy fields for backward compat
+        card.pass_rush_rating = pr
+        card.coverage_rating = pd  # Store pass defense value in legacy field
+        card.run_stop_rating = tv  # Store tackle value in legacy field
 
         # Authentic 5E position-specific ratings
         pos = position.upper()
         if pos in ("DE", "DT", "DL", "NT", "EDGE"):
-            # DL: tackle + pass rush
-            card.tackle_rating = run_stop
-            card.pass_rush_rating = pass_rush
+            card.tackle_rating = tv
+            card.pass_rush_rating = pr
+            card.pass_defense_rating = 0
+            card.intercept_range = 0
         elif pos in ("LB", "OLB", "ILB", "MLB"):
-            # LB: pass defense, tackle, pass rush, intercept range
-            card.pass_defense_rating = coverage
-            card.tackle_rating = run_stop
-            card.pass_rush_rating = pass_rush
-            card.intercept_range = max(0, min(9, (coverage - 50) // 5))  # 0-9 scale
+            card.pass_defense_rating = pd
+            card.tackle_rating = tv
+            card.pass_rush_rating = pr
+            card.intercept_range = ir
         elif pos in ("CB", "S", "SS", "FS", "DB"):
-            # DB: pass defense, pass rush, intercept range (no tackle)
-            card.pass_defense_rating = coverage
-            card.pass_rush_rating = pass_rush
-            card.intercept_range = max(0, min(14, (coverage - 40) // 4))  # 0-14 scale, DBs better
+            card.pass_defense_rating = pd
+            card.pass_rush_rating = pr
+            card.intercept_range = ir
+            card.tackle_rating = 0  # DBs have no tackle in 5E
 
         card.stats_summary = {
-            "pass_rush_rating": pass_rush,
-            "coverage_rating": coverage,
-            "run_stop_rating": run_stop,
+            "pass_rush_rating": card.pass_rush_rating,
             "tackle_rating": card.tackle_rating,
             "pass_defense_rating": card.pass_defense_rating,
             "intercept_range": card.intercept_range,
@@ -442,11 +639,12 @@ class CardGenerator:
 
     def generate_ol_card(self, name: str, team: str, number: int,
                          position: str, grade: str,
-                         run_block: int = 70, pass_block: int = 70) -> PlayerCard:
+                         run_block: int = 2, pass_block: int = 1) -> PlayerCard:
         """Generate an offensive lineman card (LT, LG, C, RG, RT).
 
-        OL cards have run_block_rating and pass_block_rating used for
-        pass rush resolution and run blocking matchups.
+        Authentic 5E BV/PBV scale:
+          Run Blocking (BV): -1 to +4
+          Pass Blocking (PBV): 0 to +3
         """
         card = PlayerCard(
             player_name=name, team=team, position=position,

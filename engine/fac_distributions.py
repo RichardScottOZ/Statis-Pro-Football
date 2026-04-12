@@ -712,6 +712,7 @@ def run_number(tens: int, ones: int) -> int:
 # ──────────────────────────────────────────────────────────────────────
 
 # Formation modifiers: {formation: {pass_rush_mod, coverage_mod, run_stop_mod}}
+# Legacy 0-100 system (still used by non-5E path)
 FORMATION_MODIFIERS: Dict[str, Dict[str, int]] = {
     "4_3":          {"pass_rush": 0,   "coverage": 0,   "run_stop": 0},
     "3_4":          {"pass_rush": -5,  "coverage": 5,   "run_stop": 5},
@@ -725,14 +726,40 @@ FORMATION_MODIFIERS: Dict[str, Dict[str, int]] = {
 }
 
 # 5E Defensive Play modifiers (keyed by DefensivePlay enum values)
+# In 5E, defense type affects completion range and run number directly
+# (via DEFENSE_PASS_TABLE_5E and RUN_NUMBER_MODIFIERS_5E below)
+# so these modifiers are now zero — the tables handle everything.
 DEFENSIVE_PLAY_MODIFIERS: Dict[str, Dict[str, int]] = {
-    "PASS_DEFENSE":          {"pass_rush": 0,   "coverage": 5,   "run_stop": -5},
-    "PREVENT_DEFENSE":       {"pass_rush": -5,  "coverage": 10,  "run_stop": -10},
-    "RUN_DEFENSE_NO_KEY":    {"pass_rush": 0,   "coverage": -5,  "run_stop": 5},
-    "RUN_DEFENSE_KEY_BACK_1":{"pass_rush": 0,   "coverage": -5,  "run_stop": 10},
-    "RUN_DEFENSE_KEY_BACK_2":{"pass_rush": 0,   "coverage": -5,  "run_stop": 10},
-    "RUN_DEFENSE_KEY_BACK_3":{"pass_rush": 0,   "coverage": -5,  "run_stop": 10},
-    "BLITZ":                 {"pass_rush": 15,  "coverage": -10, "run_stop": 0},
+    "PASS_DEFENSE":          {"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+    "PREVENT_DEFENSE":       {"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+    "RUN_DEFENSE_NO_KEY":    {"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+    "RUN_DEFENSE_KEY_BACK_1":{"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+    "RUN_DEFENSE_KEY_BACK_2":{"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+    "RUN_DEFENSE_KEY_BACK_3":{"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+    "BLITZ":                 {"pass_rush": 0,  "coverage": 0,  "run_stop": 0},
+}
+
+# ── 5E Defense/Pass Table (authentic from rules Page 5) ──────────────
+# Completion range modifiers by defense type × pass type
+DEFENSE_PASS_TABLE_5E: Dict[str, Dict[str, int]] = {
+    "RUN_DEFENSE_NO_KEY":    {"QUICK": 0,  "SHORT": 5,  "LONG": 7,  "SCREEN": 0},
+    "RUN_DEFENSE_KEY_BACK_1":{"QUICK": 0,  "SHORT": 5,  "LONG": 7,  "SCREEN": 0},
+    "RUN_DEFENSE_KEY_BACK_2":{"QUICK": 0,  "SHORT": 5,  "LONG": 7,  "SCREEN": 0},
+    "RUN_DEFENSE_KEY_BACK_3":{"QUICK": 0,  "SHORT": 5,  "LONG": 7,  "SCREEN": 0},
+    "PASS_DEFENSE":          {"QUICK": -10, "SHORT": 0,  "LONG": 0,  "SCREEN": 0},
+    "PREVENT_DEFENSE":       {"QUICK": -10, "SHORT": -5, "LONG": 0,  "SCREEN": 0},
+    "BLITZ":                 {"QUICK": 0,  "SHORT": -5, "LONG": -7, "SCREEN": 0},
+}
+
+# Run Number modifiers by defense type (authentic 5E Page 5)
+RUN_NUMBER_MODIFIERS_5E: Dict[str, Dict[str, int]] = {
+    "RUN_DEFENSE_KEY_BACK_1":{"key_correct": 4, "no_key": 2, "wrong_key": 0},
+    "RUN_DEFENSE_KEY_BACK_2":{"key_correct": 4, "no_key": 2, "wrong_key": 0},
+    "RUN_DEFENSE_KEY_BACK_3":{"key_correct": 4, "no_key": 2, "wrong_key": 0},
+    "RUN_DEFENSE_NO_KEY":    {"key_correct": 2, "no_key": 2, "wrong_key": 0},
+    "PASS_DEFENSE":          {"key_correct": 0, "no_key": 0, "wrong_key": 0},
+    "PREVENT_DEFENSE":       {"key_correct": 0, "no_key": 0, "wrong_key": 0},
+    "BLITZ":                 {"key_correct": 0, "no_key": 0, "wrong_key": 0},
 }
 
 
@@ -746,27 +773,60 @@ def get_defensive_play_modifier(defensive_play: str) -> Dict[str, int]:
     return DEFENSIVE_PLAY_MODIFIERS.get(defensive_play, {"pass_rush": 0, "coverage": 0, "run_stop": 0})
 
 
+def get_5e_completion_modifier(defense_type: str, pass_type: str) -> int:
+    """Return the 5E completion range modifier for defense type × pass type.
+
+    Per 5E rules Page 5 Defense/Pass Table.
+    """
+    entry = DEFENSE_PASS_TABLE_5E.get(defense_type, {})
+    return entry.get(pass_type.upper(), 0)
+
+
+def get_5e_run_number_modifier(defense_type: str, is_key_correct: bool = False,
+                                is_no_key: bool = True) -> int:
+    """Return the 5E run number modifier.
+
+    Per 5E rules Page 5:
+      Key on BC: +4, No Key: +2, Wrong Key: 0
+      Pass/Prevent/Blitz: 0
+    """
+    entry = RUN_NUMBER_MODIFIERS_5E.get(defense_type, {})
+    if is_key_correct:
+        return entry.get("key_correct", 0)
+    elif is_no_key:
+        return entry.get("no_key", 0)
+    return entry.get("wrong_key", 0)
+
+
 def effective_pass_rush(base_rating: int, formation: str,
                         is_blitz_tendency: bool = False) -> int:
-    """Compute effective pass-rush rating with formation + blitz bonus."""
-    mod = get_formation_modifier(formation)
-    rating = base_rating + mod["pass_rush"]
+    """Compute effective pass-rush rating.
+
+    In 5E, base_rating is 0-3 scale. Blitzing players use PR value of 2.
+    """
+    rating = base_rating
     if is_blitz_tendency:
-        rating += 10  # BLITZ tendency on FAC dice adds extra rush
-    return max(0, min(99, rating))
+        rating = 2  # Blitzing players use PR value of 2 per 5E rules
+    return max(0, rating)
 
 
 def effective_coverage(base_rating: int, formation: str,
                        is_blitz_tendency: bool = False) -> int:
-    """Compute effective coverage rating with formation + blitz penalty."""
-    mod = get_formation_modifier(formation)
-    rating = base_rating + mod["coverage"]
+    """Compute effective coverage/pass-defense rating.
+
+    In 5E, base_rating is a small number (-5 to +5).
+    Defense type modifies completion range separately via DEFENSE_PASS_TABLE_5E.
+    """
+    rating = base_rating
     if is_blitz_tendency:
-        rating -= 5  # Blitzing weakens coverage
-    return max(0, min(99, rating))
+        rating -= 2  # Blitzing weakens coverage
+    return rating
 
 
 def effective_run_stop(base_rating: int, formation: str) -> int:
-    """Compute effective run-stop rating with formation modifier."""
-    mod = get_formation_modifier(formation)
-    return max(0, min(99, base_rating + mod["run_stop"]))
+    """Compute effective run-stop/tackle rating.
+
+    In 5E, base_rating is already a small TV number (-4 to +4).
+    Defense type modifies run number separately via RUN_NUMBER_MODIFIERS_5E.
+    """
+    return base_rating

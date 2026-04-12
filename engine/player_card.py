@@ -232,21 +232,24 @@ class PlayerCard:
     inside_20_rate: float = 0.35
 
     # ── Offensive Line ────────────────────────────────────────────────
-    run_block_rating: int = 0   # OL run-blocking grade (0-99)
-    pass_block_rating: int = 0  # OL pass-blocking grade (0-99)
+    # Authentic 5E BV scale: -1 to +4 (run), 0 to +3 (pass)
+    run_block_rating: int = 0   # OL run-blocking BV (-1 to +4)
+    pass_block_rating: int = 0  # OL pass-blocking PBV (0 to +3)
 
     # ── Defense ───────────────────────────────────────────────────────
     # Legacy generic ratings (kept for backward compat; use 5E fields below)
-    pass_rush_rating: int = 50
-    coverage_rating: int = 50
-    run_stop_rating: int = 50
+    pass_rush_rating: int = 0
+    coverage_rating: int = 0
+    run_stop_rating: int = 0
     # Authentic 5E defensive ratings (position-specific):
-    #   DL:  tackle_rating, pass_rush_rating
-    #   LB:  pass_defense_rating, tackle_rating, pass_rush_rating, intercept_range
-    #   DB:  pass_defense_rating, pass_rush_rating, intercept_range (no tackle)
+    #   DL:  tackle_rating (-4 to +4), pass_rush_rating (0-3)
+    #   LB:  pass_defense_rating (-5 to +3), tackle_rating (-5 to +4),
+    #         pass_rush_rating (0-3), intercept_range (0 or 35-48 low bound)
+    #   DB:  pass_defense_rating (-5 to +5), pass_rush_rating (0-3),
+    #         intercept_range (0 or 35-48 low bound)
     tackle_rating: int = 0
     pass_defense_rating: int = 0
-    intercept_range: int = 0  # 0 = no intercept ability
+    intercept_range: int = 0  # 0 = no intercept; else low PN of intercept range (35-48)
     defender_letter: str = ""  # A-M defensive player letter for FAC matchups
 
     stats_summary: Dict[str, Any] = field(default_factory=dict)
