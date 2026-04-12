@@ -2,11 +2,13 @@
 
 A digital implementation of the classic Statis Pro Football tabletop game, featuring a Python game engine with AI play calling, a React/TypeScript web GUI, and complete player cards for all 32 NFL teams across multiple seasons.
 
+**Status:** Production-ready with 57% of 5E rules implemented, 306 tests passing.
+
 ## Overview
 
 Statis Pro Football supports two game modes:
 
-### 5th Edition Mode (New!)
+### 5th Edition Mode (Primary)
 
 The **5th-edition FAC deck system** uses a physical deck of **109 Fast Action Cards** that faithfully reproduce the Statis Pro Football 5th Edition mechanics:
 
@@ -17,6 +19,10 @@ The **5th-edition FAC deck system** uses a physical deck of **109 Fast Action Ca
 - **Two-stage pass resolution** — QB card determines receiver letter → receiver card determines yards
 - **FAC-driven mechanics** — Sack determination (ER field), receiver targeting (QK/SH/LG), screen results (SC), blocking matchups (SL/IL/SR/IR), and solitaire play calling (SOLO field)
 - **Z-card system** — 13 Z-cards trigger special events (injuries, penalties, fumbles)
+- **Offensive Strategies** — Flop, Sneak, Draw, Play-Action (all implemented)
+- **Defensive Strategies** — Double Coverage, Triple Coverage (all implemented)
+- **Big Play Defense** — Full system for teams with 9+ wins
+- **Two-Minute Offense** — Complete restrictions (yardage halving, -4 completion)
 
 ### Legacy Mode
 
@@ -28,9 +34,19 @@ The original **d8×d8 dice-based system** (64 slots, range 11–88) remains full
 - **AI Play Calling** — Solitaire mode with both legacy dice-based and 5th-edition SOLO field-based play selection
 - **Player Card System** — 5th-edition (48/12-slot) and legacy (64-slot) cards generated from real NFL statistics
 - **Two Seasons of Data** — 2024 (2023 NFL stats) and 2025 (2024 NFL stats) with all 32 teams
-- **Web GUI** — React/TypeScript frontend with game board, play-by-play log, dice roller, and card viewer
+- **Web GUI** — React/TypeScript frontend with strategy selectors, player selection, and real-time game state
+- **Web GUI** — React/TypeScript frontend with strategy selectors, player selection, and real-time game state
 - **REST API** — FastAPI backend with endpoints for game management, dice rolling, and card browsing
-- **Comprehensive Tests** — 200+ tests covering dice/deck distribution, card generation, game mechanics, and team loading
+- **Comprehensive Tests** — 306 tests covering dice/deck distribution, card generation, game mechanics, and team loading
+
+## Implementation Status
+
+- **Engine**: 81/142 5E rules (57%) fully implemented
+- **GUI**: 30/87 features (34%) implemented
+- **Tests**: 306 tests passing
+- **Documentation**: Complete audit documents and API reference
+
+See [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) for detailed status.
 
 ## Quick Start
 
