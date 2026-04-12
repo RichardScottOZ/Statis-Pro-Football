@@ -44,6 +44,58 @@ function DebugLogPanel({ log }: { log: string[] }) {
   );
 }
 
+function PlayerStatsPanel({ stats }: { stats: Record<string, Record<string, number>> }) {
+  const [expanded, setExpanded] = useState(false);
+  const players = Object.entries(stats).filter(
+    ([, s]) => (s.rushing_attempts || 0) > 0 || (s.pass_attempts || 0) > 0 || (s.receptions || 0) > 0
+  );
+  if (players.length === 0) return null;
+
+  return (
+    <div className="player-stats-panel" style={{ background: '#1a1a2e', borderRadius: '8px', padding: '8px', margin: '8px 0' }}>
+      <button
+        className="debug-toggle"
+        onClick={() => setExpanded(!expanded)}
+        style={{ width: '100%', textAlign: 'left', padding: '4px 8px' }}
+      >
+        📊 {expanded ? 'Hide' : 'Show'} Player Stats ({players.length} players)
+      </button>
+      {expanded && (
+        <div style={{ fontSize: '0.75em', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #333', color: '#aaa' }}>
+                <th style={{ textAlign: 'left', padding: '4px' }}>Player</th>
+                <th>Rush</th><th>RuYds</th><th>RuTD</th>
+                <th>Att</th><th>Cmp</th><th>PaYds</th><th>PaTD</th><th>INT</th>
+                <th>Rec</th><th>ReYds</th><th>ReTD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {players.map(([name, s]) => (
+                <tr key={name} style={{ borderBottom: '1px solid #222' }}>
+                  <td style={{ padding: '2px 4px', color: '#ddd' }}>{name}</td>
+                  <td style={{ textAlign: 'center' }}>{s.rushing_attempts || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.rushing_yards || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.rushing_tds || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.pass_attempts || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.completions || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.passing_yards || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.passing_tds || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.interceptions || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.receptions || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.receiving_yards || 0}</td>
+                  <td style={{ textAlign: 'center' }}>{s.receiving_tds || 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface GameBoardProps {
   gameId: string;
   state: GameState;
@@ -69,6 +121,8 @@ interface GameBoardProps {
   onOnsideKick: (onsideDefense?: boolean) => void;
   onSquibKick: () => void;
   onTwoPointConversion: (playType: string) => void;
+  onBigPlayDefense: () => void;
+  onTwoMinuteOffense: () => void;
   onDownloadGameLog: () => void;
   onNewGame: () => void;
 }
@@ -98,6 +152,8 @@ export function GameBoard({
   onOnsideKick,
   onSquibKick,
   onTwoPointConversion,
+  onBigPlayDefense,
+  onTwoMinuteOffense,
   onDownloadGameLog,
   onNewGame,
 }: GameBoardProps) {
@@ -217,6 +273,60 @@ export function GameBoard({
         </div>
       )}
 
+      {/* Two-Minute Offense & Big Play Defense buttons */}
+      {isInteractive && !state.is_over && (
+        <div className="tactical-actions" style={{ display: 'flex', gap: '8px', padding: '4px 12px' }}>
+          {isHumanTurn && state.quarter >= 2 && state.time_remaining <= 180 && (
+            <button
+              className="btn btn-accent btn-sm"
+              onClick={onTwoMinuteOffense}
+              disabled={loading}
+              title="Declare two-minute offense: halved time, halved run yardage"
+            >
+              ⏱️ Two-Minute Offense
+            </button>
+          )}
+          {isHumanOnDefense && (
+            <button
+              className="btn btn-accent btn-sm"
+              onClick={onBigPlayDefense}
+              disabled={loading}
+              title="Activate Big Play Defense (once per series, 9+ wins required)"
+            >
+              🛡️ Big Play Defense
+            </button>
+          )}
+          {isHumanOnDefense && (
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => onOnsideKick(true)}
+              disabled={loading}
+              title="Declare onside kick defense (reduces recovery chance for kicker)"
+            >
+              🏈 Onside Defense
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Penalty & Turnover Summary */}
+      {(state.penalties || state.turnovers) && (
+        <div className="penalty-turnover-bar" style={{ display: 'flex', gap: '16px', padding: '4px 12px', fontSize: '0.8em', color: '#aaa' }}>
+          {state.penalties && (
+            <span>
+              🚩 Penalties: {state.home_team} {state.penalties.home || 0} ({state.penalty_yards?.home || 0} yds)
+              {' / '}{state.away_team} {state.penalties.away || 0} ({state.penalty_yards?.away || 0} yds)
+            </span>
+          )}
+          {state.turnovers && (
+            <span>
+              🔄 Turnovers: {state.home_team} {state.turnovers.home || 0}
+              {' / '}{state.away_team} {state.turnovers.away || 0}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="board-content">
         <div className="board-left">
           {/* Play caller: human offense, human defense, or AI mode */}
@@ -292,6 +402,40 @@ export function GameBoard({
                 {lastPlay.receiver && <span>→ {lastPlay.receiver}</span>}
                 {lastPlay.rusher && <span>🏃 {lastPlay.rusher}</span>}
               </div>
+              {/* BV vs TV battle display */}
+              {lastPlay.bv_tv_result && (
+                <div className="bv-tv-display" style={{ fontSize: '0.8em', padding: '4px 8px', background: '#1a2a1a', borderRadius: '4px', margin: '4px 0' }}>
+                  ⚔️ BV vs TV: Blocker {lastPlay.bv_tv_result.blocker_bv} vs Defender {lastPlay.bv_tv_result.defender_tv}
+                  {' → '}{lastPlay.bv_tv_result.modifier >= 0 ? '+' : ''}{lastPlay.bv_tv_result.modifier} yds
+                </div>
+              )}
+              {/* Point of Interception display */}
+              {lastPlay.interception_point != null && (
+                <div className="int-point-display" style={{ fontSize: '0.8em', padding: '4px 8px', background: '#2a1a1a', borderRadius: '4px', margin: '4px 0' }}>
+                  📍 Interception at the {lastPlay.interception_point}-yard line
+                </div>
+              )}
+              {/* TD/Score animation */}
+              {lastPlay.is_touchdown && (
+                <div className="td-animation" style={{
+                  textAlign: 'center', fontSize: '1.5em', padding: '8px',
+                  background: 'linear-gradient(135deg, #2d5a2d, #1a3a1a)',
+                  borderRadius: '8px', margin: '4px 0',
+                  animation: 'pulse 1s ease-in-out infinite',
+                }}>
+                  🎉🏈 TOUCHDOWN! 🏈🎉
+                </div>
+              )}
+              {/* Penalty flag visual */}
+              {lastPlay.result === 'PENALTY' && (
+                <div className="penalty-flag" style={{
+                  textAlign: 'center', fontSize: '1.2em', padding: '6px',
+                  background: 'linear-gradient(135deg, #5a5a1a, #3a3a0a)',
+                  borderRadius: '8px', margin: '4px 0',
+                }}>
+                  🟡 FLAG ON THE PLAY 🟡
+                </div>
+              )}
               {/* Debug log (collapsible) */}
               {lastPlay.debug_log && lastPlay.debug_log.length > 0 && (
                 <DebugLogPanel log={lastPlay.debug_log} />
@@ -329,6 +473,11 @@ export function GameBoard({
           
           {/* Game Stats */}
           <GameStats state={state} />
+
+          {/* Player Stats Panel */}
+          {state.player_stats && Object.keys(state.player_stats).length > 0 && (
+            <PlayerStatsPanel stats={state.player_stats} />
+          )}
         </div>
 
         <div className="board-right">
