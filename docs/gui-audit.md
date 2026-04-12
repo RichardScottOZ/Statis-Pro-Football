@@ -137,9 +137,9 @@ This document tracks the implementation status of 5E rules and features in the R
 | AI Behavior | 2 | 0 | 5 | 7 |
 | Game Flow | 4 | 0 | 5 | 9 |
 | Visual Enhancements | 1 | 0 | 6 | 7 |
-| **TOTAL** | **31** | **0** | **56** | **87** |
+| **TOTAL** | **36** | **0** | **51** | **87** |
 
-**Completion: 36% (31/87)**
+**Completion: 41% (36/87)**
 
 ### Priority Improvements
 

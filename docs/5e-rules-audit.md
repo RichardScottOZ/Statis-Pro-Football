@@ -106,10 +106,10 @@ This document maps every rule from the 5th Edition Rules PDF to its implementati
 - [x] **Sack Resolution**: Sack → flip new FAC, Pass Number ÷ 3 (round up) = yards lost — `engine/play_resolver.py` calculates sack yards
 - [ ] **QB Long Gains during Pass Rush**: N→SG→LG chain for QB runs off Pass Rush line — Partially; QB rushing exists but specific Pass Rush → N → SG → LG chain not fully linked
 - [x] **Screen Pass Resolution**: Special procedure — `resolve_screen_5e()` exists
-- [ ] **Screen Pass Details**: Must be to a back (never TE/WR); use SC on FAC; if COM, use rushing N column; BV/TV never used; defense modifies Run Number — Partially implemented; screen exists but back-only restriction and no BV/TV rules not enforced
+- [x] **Screen Pass Details**: Must be to a back (never TE/WR); use SC on FAC; if COM, use rushing N column; BV/TV never used; defense modifies Run Number — `_resolve_screen_5e()` redirects to RB, uses SC field, applies rushing column
 - [ ] **Screen Pass Multiplier**: Some FAC have ×½, ×2, ×1½ multiplier on screen — `FACCard.screen_result` parses multipliers but application may be incomplete
 - [ ] **Long Pass within 20 Restriction**: No long pass inside opponent's 20 — Enforced: `engine/game.py:_execute_play_5e()` auto-converts to short pass (see earlier entry)
-- [ ] **Passes Can't Go Past End Zone**: Any catch beyond end line = TD — Handled in touchdown scoring but not explicitly as rule
+- [x] **Passes Can't Go Past End Zone**: Any catch beyond end line = TD — Implemented in pass resolution: `yards >= 99` sets `is_td = True`
 - [ ] **FL#1 vs FL#2 Rules**: FAC "flanker" always means FL#1; pass to unused RB slot goes to FL#2 — Not implemented; no flanker designation system
 
 ---
