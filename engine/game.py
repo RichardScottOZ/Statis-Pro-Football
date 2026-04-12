@@ -534,7 +534,8 @@ class Game:
         return receivers
 
     def _execute_play_5e(self, play_call: Optional[PlayCall] = None,
-                        defense_formation: Optional[str] = None) -> PlayResult:
+                        defense_formation: Optional[str] = None,
+                        defensive_strategy: Optional[str] = None) -> PlayResult:
         """Execute a single play using 5th-edition FAC deck."""
         fac_card = self.deck.draw()
         situation = self.state.to_situation()
@@ -547,6 +548,10 @@ class Game:
         def_formation_5e, def_play_5e, def_strategy_5e = self.ai.call_defense_play_5e(
             situation, fac_card
         )
+        
+        # Use provided defensive_strategy or fall back to AI-called strategy
+        if defensive_strategy is None:
+            defensive_strategy = def_strategy_5e.value
 
         off_call_str = (
             f"{OFFENSIVE_PLAY_NAMES.get(off_play, off_play.value)}"
@@ -626,6 +631,12 @@ class Game:
             receivers = self._get_all_receivers()
             defense = self.get_defense_team()
             def_form = defense_formation or self.ai.call_defense_5e(situation, fac_card)
+            
+            # Get defensive players for coverage calculations
+            defenders = []
+            if defense and defense.roster:
+                defenders = list(defense.roster.defenders)[:10]
+            
             pass_type = "LONG" if play_call.play_type == "LONG_PASS" else "SHORT"
             if qb and receiver:
                 result = self.resolver.resolve_play_action(
@@ -633,6 +644,8 @@ class Game:
                     pass_type=pass_type, defense_formation=def_form,
                     defense_coverage=defense.defense_rating,
                     defense_pass_rush=defense.defense_rating,
+                    defensive_strategy=defensive_strategy or "NONE",
+                    defenders=defenders,
                 )
                 self.state.play_log.append(f"  → {result.description}")
                 if result.turnover:
@@ -662,9 +675,9 @@ class Game:
         elif play_call.play_type == "SCREEN":
             result = self._execute_screen_5e(fac_card, defense_formation)
         elif play_call.play_type in ("LONG_PASS", "QUICK_PASS"):
-            result = self._execute_pass_5e(fac_card, play_call, defense_formation)
+            result = self._execute_pass_5e(fac_card, play_call, defense_formation, defensive_strategy)
         else:
-            result = self._execute_pass_5e(fac_card, play_call, defense_formation)
+            result = self._execute_pass_5e(fac_card, play_call, defense_formation, defensive_strategy)
 
         self.state.play_log.append(f"  → {result.description}")
 
@@ -798,13 +811,19 @@ class Game:
         )
 
     def _execute_pass_5e(self, fac_card: FACCard, play_call: PlayCall,
-                         defense_formation: Optional[str] = None) -> PlayResult:
+                         defense_formation: Optional[str] = None,
+                         defensive_strategy: Optional[str] = None) -> PlayResult:
         qb = self.get_qb()
         receiver = self._pick_receiver(play_call)
         receivers = self._get_all_receivers()
         defense = self.get_defense_team()
         situation = self.state.to_situation()
         def_formation = defense_formation or self.ai.call_defense_5e(situation, fac_card)
+        
+        # Get defensive players for coverage calculations
+        defenders = []
+        if defense and defense.roster:
+            defenders = list(defense.roster.defenders)[:10]
 
         if play_call.play_type == "LONG_PASS":
             pass_type = "LONG"
@@ -820,6 +839,8 @@ class Game:
                 defense_coverage=defense.defense_rating,
                 defense_pass_rush=defense.defense_rating,
                 defense_formation=def_formation,
+                defensive_strategy=defensive_strategy or "NONE",
+                defenders=defenders,
             )
             result.defense_formation = def_formation
             return result

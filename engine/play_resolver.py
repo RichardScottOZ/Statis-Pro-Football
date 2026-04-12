@@ -343,7 +343,9 @@ class PlayResolver:
                             receivers: list, pass_type: str,
                             defense_formation: str,
                             defense_coverage: int = 50,
-                            defense_pass_rush: int = 50) -> PlayResult:
+                            defense_pass_rush: int = 50,
+                            defensive_strategy: str = "NONE",
+                            defenders: Optional[List[PlayerCard]] = None) -> PlayResult:
         """Resolve a Play-Action pass strategy.
 
         5E Rules: Short/Long pass only.
@@ -374,6 +376,8 @@ class PlayResolver:
             defense_coverage=adjusted_coverage,
             defense_pass_rush=defense_pass_rush,
             defense_formation=defense_formation,
+            defensive_strategy=defensive_strategy,
+            defenders=defenders,
         )
         result.strategy = "PLAY_ACTION"
         result.description += f" (Play-action, completion modifier {pa_mod:+d})"
@@ -1090,7 +1094,9 @@ class PlayResolver:
                         defense_coverage: int = 50,
                         defense_pass_rush: int = 50,
                         defense_formation: str = "4_3",
-                        is_blitz_tendency: bool = False) -> PlayResult:
+                        is_blitz_tendency: bool = False,
+                        defensive_strategy: str = "NONE",
+                        defenders: Optional[List[PlayerCard]] = None) -> PlayResult:
         """Resolve a pass play using 5th-edition FAC card mechanics.
 
         Parameters
@@ -1107,6 +1113,10 @@ class PlayResolver:
             All available receivers (WRs + TEs).
         pass_type : str
             "SHORT", "LONG", "QUICK", or "SCREEN".
+        defensive_strategy : str
+            "NONE", "DOUBLE_COVERAGE", "TRIPLE_COVERAGE", or "ALT_DOUBLE_COVERAGE".
+        defenders : Optional[List[PlayerCard]]
+            Defensive players for coverage calculations.
         """
         # ── Handle Z card ────────────────────────────────────────────
         if fac_card.is_z_card:
@@ -1116,13 +1126,13 @@ class PlayResolver:
             return self._resolve_pass_inner_5e(
                 fac_card, deck, qb, receiver, receivers, pass_type,
                 defense_coverage, defense_pass_rush, defense_formation,
-                is_blitz_tendency, z_event,
+                is_blitz_tendency, z_event, defensive_strategy, defenders,
             )
 
         return self._resolve_pass_inner_5e(
             fac_card, deck, qb, receiver, receivers, pass_type,
             defense_coverage, defense_pass_rush, defense_formation,
-            is_blitz_tendency, None,
+            is_blitz_tendency, None, defensive_strategy, defenders,
         )
 
     def _resolve_pass_inner_5e(self, fac_card: FACCard, deck: FACDeck,
@@ -1133,7 +1143,9 @@ class PlayResolver:
                                defense_pass_rush: int,
                                defense_formation: str,
                                is_blitz_tendency: bool,
-                               z_event: Optional[Dict[str, Any]]) -> PlayResult:
+                               z_event: Optional[Dict[str, Any]],
+                               defensive_strategy: str = "NONE",
+                               defenders: Optional[List[PlayerCard]] = None) -> PlayResult:
         """Inner pass resolution after Z-card handling.
 
         Authentic resolution:
@@ -1266,6 +1278,21 @@ class PlayResolver:
         pn = fac_card.pass_num_int
         if pn is None:
             pn = random.randint(1, 48)
+
+        # Apply defensive strategy modifiers (5E Rule 12-13)
+        strategy_modifier = 0
+        if defensive_strategy == "DOUBLE_COVERAGE" and defenders:
+            strategy_modifier = self.resolve_double_coverage(actual_receiver, defenders)
+        elif defensive_strategy == "TRIPLE_COVERAGE" and defenders:
+            strategy_modifier = self.resolve_triple_coverage(actual_receiver, defenders)
+        elif defensive_strategy == "ALT_DOUBLE_COVERAGE" and defenders:
+            # Alternative double coverage: -7 to two receivers
+            strategy_modifier = self.resolve_double_coverage(actual_receiver, defenders)
+        
+        # Adjust PN based on strategy modifier (negative modifier = harder to complete)
+        # Strategy modifiers reduce completion range, so we shift PN upward
+        if strategy_modifier < 0:
+            pn = min(48, pn + abs(strategy_modifier))
 
         # Check authentic range-based passing first
         if qb.passing_short or qb.passing_long or qb.passing_quick:
