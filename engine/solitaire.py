@@ -6,9 +6,15 @@ Supports two modes:
 """
 import random
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from .fast_action_dice import FastActionDice, DiceResult, PlayTendency
 from .fac_deck import FACCard
+from .play_types import (
+    DefensivePlay, DefensiveFormation, DefensiveStrategy,
+    OffensivePlay, OffensiveStrategy, PlayerInvolved,
+    OFFENSIVE_PLAY_NAMES, DEFENSIVE_PLAY_NAMES, OFFENSIVE_STRATEGY_NAMES,
+    DEFENSIVE_STRATEGY_NAMES, PLAYER_INVOLVED_NAMES,
+)
 
 
 @dataclass
@@ -32,6 +38,8 @@ class PlayCall:
     direction: str   # LEFT, RIGHT, MIDDLE, IL, IR, SL, SR, DEEP_LEFT, DEEP_RIGHT, etc.
     reasoning: str
     strategy: Optional[str] = None  # FLOP, SNEAK, DRAW, PLAY_ACTION (5E offensive strategies)
+    offensive_play: Optional[str] = None      # OffensivePlay value
+    player_involved: Optional[str] = None     # PlayerInvolved value
 
 
 # ── SOLO field code → PlayCall mapping ───────────────────────────────
@@ -280,3 +288,143 @@ class SolitaireAI:
                     return random.choice(["4_3_BLITZ", "NICKEL_BLITZ"])
 
         return self.call_defense(situation)
+
+    # ── 5th-Edition proper play / strategy calling ───────────────────
+
+    def call_defense_play_5e(self, situation: GameSituation,
+                              fac_card: Optional[FACCard] = None
+                              ) -> Tuple[DefensiveFormation, DefensivePlay, DefensiveStrategy]:
+        """Call a defensive play using 5E rules.
+
+        Returns (DefensiveFormation, DefensivePlay, DefensiveStrategy).
+        """
+        # Formation based on personnel
+        if situation.distance <= 2 and situation.yard_line >= 95:
+            formation = DefensiveFormation.GOAL_LINE
+        elif situation.down == 3 and situation.distance >= 7:
+            formation = DefensiveFormation.NICKEL
+        else:
+            formation = random.choice([DefensiveFormation.FOUR_THREE, DefensiveFormation.THREE_FOUR])
+
+        # Defensive play based on FAC SOLO field
+        if fac_card is not None and not fac_card.is_z_card:
+            solo_dict = fac_card.parse_solo()
+            if solo_dict:
+                sit_num = _situation_number(situation)
+                code = solo_dict.get(sit_num, "")
+                if code == "BLZ":
+                    return (formation, DefensivePlay.BLITZ, DefensiveStrategy.NONE)
+                # Pass-oriented defense codes
+                if code.startswith("P"):
+                    play = random.choice([DefensivePlay.PASS_DEFENSE, DefensivePlay.PREVENT_DEFENSE])
+                    return (formation, play, DefensiveStrategy.NONE)
+
+        # Situational play calling
+        if situation.down == 3 and situation.distance >= 10:
+            play = DefensivePlay.PREVENT_DEFENSE
+        elif situation.down == 3 and situation.distance >= 5:
+            play = DefensivePlay.PASS_DEFENSE
+        elif situation.down <= 2 and situation.distance <= 3:
+            play = random.choice([
+                DefensivePlay.RUN_DEFENSE_KEY_BACK_1,
+                DefensivePlay.RUN_DEFENSE_KEY_BACK_2,
+            ])
+        else:
+            play = random.choice([
+                DefensivePlay.RUN_DEFENSE_NO_KEY,
+                DefensivePlay.PASS_DEFENSE,
+                DefensivePlay.RUN_DEFENSE_KEY_BACK_1,
+            ])
+
+        return (formation, play, DefensiveStrategy.NONE)
+
+    def call_offense_play_5e(self, situation: GameSituation,
+                              fac_card: Optional[FACCard] = None
+                              ) -> Tuple[OffensivePlay, OffensiveStrategy, PlayerInvolved]:
+        """Call an offensive play using 5E rules.
+
+        Returns (OffensivePlay, OffensiveStrategy, PlayerInvolved).
+        """
+        # Use SOLO field if available
+        if fac_card is not None and not fac_card.is_z_card:
+            solo_dict = fac_card.parse_solo()
+            if solo_dict:
+                sit_num = _situation_number(situation)
+                code = solo_dict.get(sit_num, "")
+                return _solo_code_to_5e_play(code, situation)
+
+        # Situational play calling without SOLO
+        if situation.down == 4:
+            # Special teams handled elsewhere; default to short pass
+            return (OffensivePlay.SHORT_PASS, OffensiveStrategy.NONE, PlayerInvolved.LEFT_END)
+
+        if situation.time_remaining <= 120 and situation.score_diff < 0:
+            play = random.choice([OffensivePlay.SHORT_PASS, OffensivePlay.LONG_PASS])
+            player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END,
+                                    PlayerInvolved.FLANKER_OR_BACK_3])
+            return (play, OffensiveStrategy.NONE, player)
+
+        if situation.down <= 2 and situation.distance <= 3:
+            play = random.choice([OffensivePlay.RUNNING_INSIDE_LEFT,
+                                  OffensivePlay.RUNNING_INSIDE_RIGHT])
+            return (play, OffensiveStrategy.NONE, PlayerInvolved.RB_1)
+
+        if situation.down == 3 and situation.distance >= 7:
+            play = random.choice([OffensivePlay.SHORT_PASS, OffensivePlay.LONG_PASS])
+            player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END])
+            return (play, OffensiveStrategy.NONE, player)
+
+        # Normal play calling
+        play = random.choice(list(OffensivePlay))
+        if play in (OffensivePlay.RUNNING_INSIDE_LEFT, OffensivePlay.RUNNING_INSIDE_RIGHT,
+                    OffensivePlay.RUNNING_SWEEP_LEFT, OffensivePlay.RUNNING_SWEEP_RIGHT):
+            player = random.choice([PlayerInvolved.RB_1, PlayerInvolved.RB_2])
+            strategy = random.choice([OffensiveStrategy.NONE, OffensiveStrategy.DRAW])
+        elif play == OffensivePlay.END_AROUND_QB_SNEAK:
+            player = random.choice([PlayerInvolved.QB_RUNNING, PlayerInvolved.FLANKER_OR_BACK_3])
+            strategy = OffensiveStrategy.NONE
+        else:
+            player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END,
+                                    PlayerInvolved.FLANKER_OR_BACK_3, PlayerInvolved.RB_1])
+            strategy = random.choice([OffensiveStrategy.NONE, OffensiveStrategy.PLAY_ACTION])
+
+        return (play, strategy, player)
+
+
+def _solo_code_to_5e_play(code: str, situation: GameSituation
+                           ) -> Tuple[OffensivePlay, OffensiveStrategy, PlayerInvolved]:
+    """Convert a SOLO field code to 5E play/strategy/player triple."""
+    code = code.strip()
+
+    if code.startswith("R(BC)"):
+        play = random.choice([OffensivePlay.RUNNING_INSIDE_LEFT,
+                              OffensivePlay.RUNNING_INSIDE_RIGHT])
+        return (play, OffensiveStrategy.NONE, PlayerInvolved.RB_1)
+
+    if code.startswith("R(NK)"):
+        play = random.choice([OffensivePlay.RUNNING_SWEEP_LEFT,
+                              OffensivePlay.RUNNING_SWEEP_RIGHT,
+                              OffensivePlay.RUNNING_INSIDE_LEFT,
+                              OffensivePlay.RUNNING_INSIDE_RIGHT])
+        return (play, OffensiveStrategy.NONE, PlayerInvolved.RB_2)
+
+    if code == "P(x2)":
+        player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END])
+        return (OffensivePlay.LONG_PASS, OffensiveStrategy.NONE, player)
+
+    if code == "PR(x2)":
+        player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END])
+        return (OffensivePlay.LONG_PASS, OffensiveStrategy.PLAY_ACTION, player)
+
+    if code == "PR":
+        player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END,
+                                PlayerInvolved.FLANKER_OR_BACK_3])
+        return (OffensivePlay.SHORT_PASS, OffensiveStrategy.PLAY_ACTION, player)
+
+    if code == "P":
+        player = random.choice([PlayerInvolved.LEFT_END, PlayerInvolved.RIGHT_END,
+                                PlayerInvolved.FLANKER_OR_BACK_3])
+        return (OffensivePlay.SHORT_PASS, OffensiveStrategy.NONE, player)
+
+    # Fallback — treat unknown codes as a run
+    return (OffensivePlay.RUNNING_INSIDE_LEFT, OffensiveStrategy.NONE, PlayerInvolved.RB_1)
