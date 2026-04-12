@@ -68,7 +68,10 @@ def test_pass_play_response_includes_pass_number_and_optional_run_number():
 
     assert response.status_code == 200
     play_result = response.json()["play_result"]
-    assert 1 <= play_result["pass_number"] <= 48
+    if play_result["pass_number"] is not None:
+        assert 1 <= play_result["pass_number"] <= 48
+    else:
+        assert play_result["result"] == "SACK"
     if play_result["run_number"] is not None:
         assert 1 <= play_result["run_number"] <= 12
     assert play_result["defense_formation"] in {
