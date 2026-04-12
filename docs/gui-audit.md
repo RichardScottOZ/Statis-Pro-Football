@@ -71,10 +71,13 @@ This document tracks the implementation status of 5E rules and features in the R
 - [x] **FAC Card Display** — Shows RUN#/PASS# and Z-card indicator after each play
 - [x] **Run Number / Pass Number** — Displayed in FAC card after each play
 - [x] **Z-Card Events** — Z-card indicator shown in FAC card display with warning icon
-- [ ] **BV vs TV Battle** — No display of blocking/tackling matchup
-- [ ] **Point of Interception** — Not calculated/displayed
-- [ ] **Two-Minute Offense** — No UI to declare two-minute offense
+- [ ] **BV vs TV Battle** — No display of blocking/tackling matchup (backend fully implements BV vs TV)
+- [ ] **Point of Interception** — Not calculated/displayed (backend implements via `calculate_point_of_interception()`)
+- [ ] **Two-Minute Offense** — No UI to declare two-minute offense (backend auto-detects)
 - [x] **Two-Minute Warning** — Visual indication with pulsing badge at 2:00 mark
+- [x] **Authentic 5E Rating Scale** — Backend now uses authentic small-number ratings (PR 0-3, Pass Def -2 to +4, Tackle -5 to +4, OL blocking -1 to +4)
+- [x] **Timeout Restriction** — Backend enforces 5E timeout rule (only after plays > 10 seconds)
+- [x] **Half-End Defensive Penalty** — Backend prevents half from ending on defensive penalty
 
 ## Player Cards
 
@@ -132,14 +135,14 @@ This document tracks the implementation status of 5E rules and features in the R
 | Special Teams | 2 | 0 | 7 | 9 |
 | Roster Management | 0 | 0 | 6 | 6 |
 | Game State Display | 6 | 0 | 5 | 11 |
-| 5E Features | 3 | 0 | 8 | 11 |
+| 5E Features | 8 | 0 | 4 | 12 |
 | Player Cards | 2 | 0 | 7 | 9 |
 | AI Behavior | 2 | 0 | 5 | 7 |
 | Game Flow | 4 | 0 | 5 | 9 |
 | Visual Enhancements | 1 | 0 | 6 | 7 |
-| **TOTAL** | **36** | **0** | **51** | **87** |
+| **TOTAL** | **41** | **0** | **47** | **88** |
 
-**Completion: 41% (36/87)**
+**Completion: 47% (41/88)**
 
 ### Priority Improvements
 

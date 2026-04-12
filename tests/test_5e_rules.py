@@ -427,3 +427,375 @@ class TestPlayCallStrategy:
             direction="LEFT", reasoning="test",
         )
         assert pc.strategy is None
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  NEW: Tests for 5E rating scale conversion and remaining rules
+# ═════════════════════════════════════════════════════════════════════
+
+class TestAuthenticRatingScale:
+    """Verify defensive/OL ratings are on authentic 5E small-number scale."""
+
+    def test_defensive_pass_rush_range(self):
+        """Pass rush ratings should be 0-3."""
+        team = Team.load("KC", "2025_5e")
+        for p in team.roster.defenders:
+            pr = getattr(p, 'pass_rush_rating', None)
+            if pr is not None:
+                assert 0 <= pr <= 3, f"{p.player_name} pass_rush={pr}"
+
+    def test_defensive_tackle_range(self):
+        """Tackle ratings for DL: -4 to +2, LB: -5 to +4."""
+        team = Team.load("KC", "2025_5e")
+        for p in team.roster.defenders:
+            tr = getattr(p, 'tackle_rating', None)
+            if tr is not None:
+                pos = p.position.upper()
+                if pos in ("DE", "DT", "DL"):
+                    assert -4 <= tr <= 2, f"{p.player_name} ({pos}) tackle={tr}"
+                elif pos == "LB":
+                    assert -5 <= tr <= 4, f"{p.player_name} ({pos}) tackle={tr}"
+
+    def test_ol_run_block_range(self):
+        """OL run_block_rating should be -1 to +4."""
+        team = Team.load("KC", "2025_5e")
+        for p in team.roster.offensive_line:
+            rb = getattr(p, 'run_block_rating', None)
+            if rb is not None:
+                assert -1 <= rb <= 4, f"{p.player_name} run_block={rb}"
+
+    def test_ol_pass_block_range(self):
+        """OL pass_block_rating should be 0 to +3."""
+        team = Team.load("KC", "2025_5e")
+        for p in team.roster.offensive_line:
+            pb = getattr(p, 'pass_block_rating', None)
+            if pb is not None:
+                assert 0 <= pb <= 3, f"{p.player_name} pass_block={pb}"
+
+    def test_all_32_teams_converted(self):
+        """All 32 teams should have ratings in 5E scale."""
+        teams = [
+            "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE",
+            "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC",
+            "LAC", "LAR", "LV", "MIA", "MIN", "NE", "NO", "NYG",
+            "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WSH",
+        ]
+        for abbr in teams:
+            team = Team.load(abbr, "2025_5e")
+            # Check at least one defender has small-scale ratings
+            for p in team.roster.defenders[:3]:
+                pr = getattr(p, 'pass_rush_rating', None)
+                if pr is not None:
+                    assert pr <= 3, f"{abbr}: {p.player_name} pass_rush={pr} (should be 0-3)"
+
+
+class TestRatingConversion:
+    """Test legacy-to-5E rating conversion functions."""
+
+    def test_pass_rush_conversion(self):
+        from engine.card_generator import _legacy_to_5e_pass_rush
+        assert _legacy_to_5e_pass_rush(90) == 3
+        assert _legacy_to_5e_pass_rush(75) == 2
+        assert _legacy_to_5e_pass_rush(55) == 1
+        assert _legacy_to_5e_pass_rush(30) == 0
+
+    def test_pass_defense_conversion(self):
+        from engine.card_generator import _legacy_to_5e_pass_defense
+        assert _legacy_to_5e_pass_defense(95) == 4
+        assert _legacy_to_5e_pass_defense(85) == 3
+        assert _legacy_to_5e_pass_defense(75) == 2
+        assert _legacy_to_5e_pass_defense(65) == 1
+        assert _legacy_to_5e_pass_defense(55) == 0
+        assert _legacy_to_5e_pass_defense(45) == -1
+        assert _legacy_to_5e_pass_defense(30) == -2
+
+    def test_tackle_dl_conversion(self):
+        from engine.card_generator import _legacy_to_5e_tackle
+        assert _legacy_to_5e_tackle(95, "DT") == 2
+        assert _legacy_to_5e_tackle(85, "DE") == 1
+        assert _legacy_to_5e_tackle(75, "DT") == 0
+        assert _legacy_to_5e_tackle(55, "DE") == -2
+        assert _legacy_to_5e_tackle(30, "DT") == -4
+
+    def test_tackle_lb_conversion(self):
+        from engine.card_generator import _legacy_to_5e_tackle
+        assert _legacy_to_5e_tackle(95, "LB") == 4
+        assert _legacy_to_5e_tackle(85, "LB") == 3
+        assert _legacy_to_5e_tackle(78, "LB") == 2
+        assert _legacy_to_5e_tackle(70, "LB") == 1
+        assert _legacy_to_5e_tackle(55, "LB") == -1
+        assert _legacy_to_5e_tackle(20, "LB") == -5
+
+    def test_run_block_conversion(self):
+        from engine.card_generator import _legacy_to_5e_run_block
+        assert _legacy_to_5e_run_block(95) == 4
+        assert _legacy_to_5e_run_block(80) == 3
+        assert _legacy_to_5e_run_block(70) == 2
+        assert _legacy_to_5e_run_block(60) == 1
+        assert _legacy_to_5e_run_block(45) == 0
+        assert _legacy_to_5e_run_block(30) == -1
+
+    def test_pass_block_conversion(self):
+        from engine.card_generator import _legacy_to_5e_pass_block
+        assert _legacy_to_5e_pass_block(90) == 3
+        assert _legacy_to_5e_pass_block(75) == 2
+        assert _legacy_to_5e_pass_block(60) == 1
+        assert _legacy_to_5e_pass_block(40) == 0
+
+    def test_intercepts_to_range(self):
+        from engine.card_generator import _intercepts_to_range
+        assert _intercepts_to_range(0) == 48
+        assert _intercepts_to_range(3) == 47
+        assert _intercepts_to_range(5) == 45
+        assert _intercepts_to_range(10) == 38
+        assert _intercepts_to_range(13) == 35
+
+    def test_sacks_to_pass_rush(self):
+        from engine.card_generator import _sacks_to_pass_rush
+        assert _sacks_to_pass_rush(0) == 0
+        assert _sacks_to_pass_rush(2) == 1
+        assert _sacks_to_pass_rush(4) == 2
+        assert _sacks_to_pass_rush(7) == 3
+
+
+class TestFormationModifiers5E:
+    """Verify formation modifiers are on small-number scale."""
+
+    def test_modifiers_small_scale(self):
+        from engine.fac_distributions import FORMATION_MODIFIERS
+        for name, mods in FORMATION_MODIFIERS.items():
+            for key, val in mods.items():
+                assert -2 <= val <= 2, f"{name}.{key}={val} should be small"
+
+    def test_effective_pass_rush(self):
+        from engine.fac_distributions import effective_pass_rush
+        # Base 2 + blitz +1 = 3
+        assert effective_pass_rush(2, "4_3", is_blitz_tendency=True) == 3
+        # Base 2 + no blitz = 2
+        assert effective_pass_rush(2, "4_3", is_blitz_tendency=False) == 2
+        # Base 0, no mod
+        assert effective_pass_rush(0, "4_3") == 0
+
+    def test_effective_coverage(self):
+        from engine.fac_distributions import effective_coverage
+        # Coverage is now direct small-number scale
+        assert effective_coverage(2, "4_3") == 2
+        # Blitz weakens coverage by 1
+        assert effective_coverage(2, "4_3", is_blitz_tendency=True) == 1
+
+
+class TestDroppedPasses:
+    """Test dropped passes rule (Rule 11)."""
+
+    def test_dropped_when_rn_equals_game_use(self):
+        resolver = PlayResolver()
+        from engine.player_card import PlayerCard
+        wr = PlayerCard("Test WR", "KC", "WR", 88, "B")
+        wr.endurance_rushing = 3
+        assert resolver.check_dropped_pass(3, wr) is True
+        assert resolver.check_dropped_pass(2, wr) is False
+
+    def test_no_drop_for_workhorse(self):
+        resolver = PlayResolver()
+        from engine.player_card import PlayerCard
+        wr = PlayerCard("Test WR", "KC", "WR", 88, "A")
+        wr.endurance_rushing = 0
+        assert resolver.check_dropped_pass(0, wr) is False
+
+
+class TestScreenPassModifiers:
+    """Test screen pass run number modifiers (Rule 5)."""
+
+    def test_screen_run_modifier_run_defense(self):
+        assert PlayResolver.get_screen_run_modifier("4_3") == 2
+        assert PlayResolver.get_screen_run_modifier("GOAL_LINE") == 2
+
+    def test_screen_run_modifier_pass_defense(self):
+        assert PlayResolver.get_screen_run_modifier("NICKEL_ZONE") == 0
+        assert PlayResolver.get_screen_run_modifier("4_3_COVER2") == 0
+
+    def test_screen_run_modifier_blitz(self):
+        assert PlayResolver.get_screen_run_modifier("4_3_BLITZ") == 0
+
+
+class TestWithin20Modifier:
+    """Test within-20 completion modifier (Rule 14)."""
+
+    def test_within_20(self):
+        assert PlayResolver.get_within_20_completion_modifier(85) == -5
+        assert PlayResolver.get_within_20_completion_modifier(95) == -5
+
+    def test_outside_20(self):
+        assert PlayResolver.get_within_20_completion_modifier(50) == 0
+        assert PlayResolver.get_within_20_completion_modifier(79) == 0
+
+
+class TestZCardIgnore:
+    """Test Z card ignore rules."""
+
+    def test_ignore_on_fg(self):
+        assert PlayResolver.should_ignore_z_card("FG") is True
+
+    def test_ignore_on_xp(self):
+        assert PlayResolver.should_ignore_z_card("XP") is True
+
+    def test_ignore_on_onside(self):
+        assert PlayResolver.should_ignore_z_card("ONSIDE_KICK") is True
+
+    def test_ignore_on_incomplete(self):
+        assert PlayResolver.should_ignore_z_card("INCOMPLETE") is True
+
+    def test_not_ignore_on_run(self):
+        assert PlayResolver.should_ignore_z_card("RUN") is False
+
+    def test_not_ignore_on_pass(self):
+        assert PlayResolver.should_ignore_z_card("PASS") is False
+
+
+class TestFumbleHomeField:
+    """Test fumble home field advantage rule."""
+
+    def test_home_team_bonus(self):
+        # Home team recovers on roll 5 (normally defense)
+        assert PlayResolver.apply_fumble_home_field(True, 5) == "OFFENSE"
+        assert PlayResolver.apply_fumble_home_field(True, 6) == "DEFENSE"
+
+    def test_away_team_no_bonus(self):
+        assert PlayResolver.apply_fumble_home_field(False, 5) == "DEFENSE"
+        assert PlayResolver.apply_fumble_home_field(False, 4) == "OFFENSE"
+
+
+class TestQBEndurance:
+    """Test QB endurance modifier."""
+
+    def test_endurance_a(self):
+        from engine.player_card import PlayerCard
+        qb = PlayerCard("Test QB", "KC", "QB", 15, "A")
+        qb.endurance_passing = "A"
+        assert PlayResolver.get_qb_endurance_modifier(qb) == 0
+
+    def test_endurance_b(self):
+        from engine.player_card import PlayerCard
+        qb = PlayerCard("Test QB", "KC", "QB", 15, "B")
+        qb.endurance_passing = "B"
+        assert PlayResolver.get_qb_endurance_modifier(qb) == -2
+
+    def test_endurance_c(self):
+        from engine.player_card import PlayerCard
+        qb = PlayerCard("Test QB", "KC", "QB", 15, "C")
+        qb.endurance_passing = "C"
+        assert PlayResolver.get_qb_endurance_modifier(qb) == -4
+
+
+class TestCheckoffEndurance:
+    """Test check-off pass endurance modifier."""
+
+    def test_high_endurance_penalty(self):
+        from engine.player_card import PlayerCard
+        wr = PlayerCard("Test WR", "KC", "WR", 88, "C")
+        wr.endurance_rushing = 3
+        assert PlayResolver.get_checkoff_endurance_modifier(wr) == -3
+
+    def test_low_endurance_no_penalty(self):
+        from engine.player_card import PlayerCard
+        wr = PlayerCard("Test WR", "KC", "WR", 88, "A")
+        wr.endurance_rushing = 1
+        assert PlayResolver.get_checkoff_endurance_modifier(wr) == 0
+
+
+class TestExtraPassBlocking:
+    """Test extra pass blocking rule."""
+
+    def test_rb_blocks(self):
+        # OL sum 8, DL sum 6, RB BV +2 → (6 - 10) * 2 = -8 (offense wins)
+        assert PlayResolver.resolve_extra_pass_blocking(8, 6, 2) == (6 - 10) * 2
+
+    def test_without_extra_blocker(self):
+        # OL sum 8, DL sum 6, no extra → (6 - 8) * 2 = -4
+        assert PlayResolver.resolve_extra_pass_blocking(8, 6, 0) == -4
+
+
+class TestOutOfPosition:
+    """Test out-of-position penalty."""
+
+    def test_ol_wrong_position(self):
+        from engine.player_card import PlayerCard
+        p = PlayerCard("Test OL", "KC", "LT", 71, "B")
+        assert PlayResolver.check_out_of_position_penalty(p, "RG") == -1
+
+    def test_ol_correct_position(self):
+        from engine.player_card import PlayerCard
+        p = PlayerCard("Test OL", "KC", "LT", 71, "B")
+        assert PlayResolver.check_out_of_position_penalty(p, "LT") == 0
+
+
+class TestSolitaireRules:
+    """Test solitaire-specific rules."""
+
+    def test_no_consecutive_screen_quick(self):
+        from engine.solitaire import SolitaireAI, PlayCall
+        ai = SolitaireAI()
+        # First screen is fine
+        pc1 = PlayCall("SCREEN", "SHOTGUN", "MIDDLE", "test")
+        result1 = ai.enforce_no_consecutive_screen_quick(pc1)
+        assert result1.play_type == "SCREEN"
+
+        # Second screen should be converted
+        pc2 = PlayCall("SCREEN", "SHOTGUN", "MIDDLE", "test")
+        result2 = ai.enforce_no_consecutive_screen_quick(pc2)
+        assert result2.play_type == "SHORT_PASS"
+
+    def test_prevent_within_20(self):
+        from engine.solitaire import SolitaireAI, GameSituation
+        ai = SolitaireAI()
+        sit = GameSituation(down=1, distance=10, yard_line=85,
+                            score_diff=0, quarter=1, time_remaining=600)
+        result = ai.convert_prevent_within_20(sit, "3_4_ZONE")
+        assert result == "4_3_COVER2"
+
+    def test_no_conversion_outside_20(self):
+        from engine.solitaire import SolitaireAI, GameSituation
+        ai = SolitaireAI()
+        sit = GameSituation(down=1, distance=10, yard_line=50,
+                            score_diff=0, quarter=1, time_remaining=600)
+        result = ai.convert_prevent_within_20(sit, "3_4_ZONE")
+        assert result == "3_4_ZONE"
+
+
+class TestSolitaireZCardRemoval:
+    """Test solitaire Z card removal."""
+
+    def test_solitaire_deck_has_fewer_z_cards(self):
+        from engine.fac_deck import FACDeck
+        normal = FACDeck(seed=42)
+        solitaire = FACDeck(seed=42, solitaire=True)
+        normal_z = sum(1 for c in normal._draw_pile if c.is_z_card)
+        sol_z = sum(1 for c in solitaire._draw_pile if c.is_z_card)
+        assert sol_z == normal_z - 1
+        assert solitaire.cards_remaining == normal.cards_remaining - 1
+
+    def test_non_solitaire_has_all_z_cards(self):
+        from engine.fac_deck import FACDeck
+        deck = FACDeck(seed=42, solitaire=False)
+        z_count = sum(1 for c in deck._draw_pile if c.is_z_card)
+        assert z_count == 13
+
+
+class TestTimeoutRestriction:
+    """Test timeout restriction (only after plays > 10s)."""
+
+    def test_timeout_after_run(self):
+        """Timeout allowed after a run play (40s)."""
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True)
+        game._last_play_time = 40
+        assert game.call_timeout("offense") is True
+
+    def test_timeout_denied_after_incomplete(self):
+        """Timeout denied after incomplete pass (10s)."""
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True)
+        game._last_play_time = 10
+        assert game.call_timeout("offense") is False

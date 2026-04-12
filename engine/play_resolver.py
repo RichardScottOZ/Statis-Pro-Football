@@ -307,7 +307,7 @@ class PlayResolver:
 
     def resolve_draw(self, fac_card: FACCard, deck: FACDeck,
                      rusher: PlayerCard, defense_formation: str,
-                     defense_run_stop: int = 50) -> PlayResult:
+                     defense_run_stop: int = 0) -> PlayResult:
         """Resolve a Draw Play strategy.
 
         5E Rules: Inside run to any back/QB.
@@ -342,8 +342,8 @@ class PlayResolver:
                             qb: PlayerCard, receiver: PlayerCard,
                             receivers: list, pass_type: str,
                             defense_formation: str,
-                            defense_coverage: int = 50,
-                            defense_pass_rush: int = 50,
+                            defense_coverage: int = 0,
+                            defense_pass_rush: int = 0,
                             defensive_strategy: str = "NONE",
                             defenders: Optional[List[PlayerCard]] = None) -> PlayResult:
         """Resolve a Play-Action pass strategy.
@@ -658,7 +658,7 @@ class PlayResolver:
 
     def resolve_run(self, dice: DiceResult, rusher: PlayerCard,
                     play_direction: str = "MIDDLE",
-                    defense_run_stop: int = 50,
+                    defense_run_stop: int = 0,
                     defense_formation: str = "4_3",
                     down: int = 0, distance: int = 0,
                     yard_line: int = 0, quarter: int = 0,
@@ -684,15 +684,14 @@ class PlayResolver:
             yards = play_data.get("yards", 0)
             is_td = play_data.get("td", False)
 
-        # Defense run-stop modifier: shifts yards based on rating
-        def_modifier = (eff_run_stop - 50) / 100.0
+        # Defense run-stop modifier: authentic 5E small-number scale
         if result_type in ("GAIN", "OOB"):
-            yards = max(-5, int(yards - def_modifier * 2))
-            # High run-stop can force TFL
-            if eff_run_stop >= 80 and random.random() < (eff_run_stop - 75) / 100.0:
+            yards = max(-5, int(yards - eff_run_stop))
+            # High tackle rating can force TFL
+            if eff_run_stop >= 3 and random.random() < 0.15:
                 yards = min(yards, random.choice([-2, -1, 0]))
-            # High run-stop can force fumble
-            if eff_run_stop >= 85 and result_type == "GAIN" and random.random() < 0.03:
+            # High tackle rating can force fumble
+            if eff_run_stop >= 3 and result_type == "GAIN" and random.random() < 0.03:
                 result_type = "FUMBLE"
 
         # Z-card check
@@ -760,8 +759,8 @@ class PlayResolver:
 
     def resolve_pass(self, dice: DiceResult, qb: PlayerCard,
                      receiver: PlayerCard, pass_length: str = "SHORT",
-                     defense_coverage: int = 50,
-                     defense_pass_rush: int = 50,
+                     defense_coverage: int = 0,
+                     defense_pass_rush: int = 0,
                      defense_formation: str = "4_3",
                      is_blitz_tendency: bool = False,
                      down: int = 0, distance: int = 0,
@@ -778,8 +777,8 @@ class PlayResolver:
         )
 
         # ── Stage 0: Pass-rush check (before QB card lookup) ────────
-        # High pass rush can shift a normal play to SACK/PRESSURE
-        sack_chance = (eff_pass_rush - 50) / 200.0  # 0 at 50, 0.125 at 75, 0.245 at 99
+        # Authentic 5E: pass rush value 0-3, higher = more dangerous
+        sack_chance = eff_pass_rush * 0.08  # 0→0%, 1→8%, 2→16%, 3→24%
         if sack_chance > 0 and random.random() < sack_chance:
             loss = random.choice([-3, -4, -5, -6, -7, -8])
             z_event = self._check_z_card(
@@ -831,17 +830,18 @@ class PlayResolver:
                 rec_td = rec_data.get("td", False)
                 is_td = is_td or rec_td
 
-        # ── Coverage modifier ────────────────────────────────────────
-        cov_modifier = (eff_coverage - 50) / 200.0
+        # ── Coverage modifier (authentic 5E: pass_defense −2 to +4) ──
+        # Positive coverage reduces yards, negative increases them
         if result_type == "COMPLETE":
-            yards = max(0, int(yards * (1 - cov_modifier)))
+            cov_shift = eff_coverage  # Direct yard shift
+            yards = max(0, yards - cov_shift)
             # High coverage can convert completion → incompletion
-            if eff_coverage >= 80 and random.random() < (eff_coverage - 75) / 150.0:
+            if eff_coverage >= 3 and random.random() < 0.10:
                 result_type = "INCOMPLETE"
                 yards = 0
                 is_td = False
             # Very high coverage can convert completion → INT (tipped ball)
-            elif eff_coverage >= 90 and random.random() < 0.03:
+            elif eff_coverage >= 4 and random.random() < 0.03:
                 result_type = "INT"
                 yards = 0
                 is_td = False
@@ -1092,8 +1092,8 @@ class PlayResolver:
                         qb: PlayerCard, receiver: PlayerCard,
                         receivers: List[PlayerCard],
                         pass_type: str = "SHORT",
-                        defense_coverage: int = 50,
-                        defense_pass_rush: int = 50,
+                        defense_coverage: int = 0,
+                        defense_pass_rush: int = 0,
                         defense_formation: str = "4_3",
                         is_blitz_tendency: bool = False,
                         defensive_strategy: str = "NONE",
@@ -1368,11 +1368,30 @@ class PlayResolver:
 
         # ── INC result — check for INC-range interception ────────────
         if qb_result == "INC":
-            # 5E Rule: If PN in INC range AND within defender's Intercept Range
-            # → interception instead of incomplete
+            # 5E Rule: If PN within defender's Intercept Range → INT
+            # intercept_range is the LOW end (e.g. 43 means 43-48)
             if hasattr(actual_receiver, 'intercept_range') and actual_receiver.intercept_range:
                 int_range = actual_receiver.intercept_range
-                if isinstance(int_range, (list, tuple)) and len(int_range) == 2:
+                if isinstance(int_range, int) and int_range <= 48:
+                    # Authentic 5E: range is int_range to 48
+                    if int_range <= pn <= 48:
+                        rn_for_ret = fac_card.run_num_int or random.randint(1, 12)
+                        defender_pos = getattr(actual_receiver, 'position', 'DB')
+                        int_yards, int_td = Charts.roll_int_return_5e(rn_for_ret, defender_pos)
+                        return PlayResult(
+                            play_type="PASS", yards_gained=0,
+                            result="INT", turnover=True, turnover_type="INT",
+                            description=(
+                                f"{qb.player_name} pass intercepted by defender in coverage!"
+                                f"{'Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
+                            ),
+                            passer=qb.player_name, receiver=actual_receiver.player_name,
+                            z_card_event=z_event,
+                            pass_number_used=pn,
+                            run_number_used=rn_for_ret,
+                        )
+                elif isinstance(int_range, (list, tuple)) and len(int_range) == 2:
+                    # Legacy format: [low, high] range
                     if int_range[0] <= pn <= int_range[1]:
                         int_yards, int_td = Charts.roll_int_return()
                         return PlayResult(
@@ -1485,11 +1504,10 @@ class PlayResolver:
             yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
             is_td = random.random() < 0.05
 
-        # Coverage modifier
+        # Coverage modifier (authentic 5E: pass_defense −2 to +4)
         eff_cov = effective_coverage(defense_coverage, defense_formation, is_blitz_tendency)
-        cov_modifier = (eff_cov - 50) / 200.0
-        if cov_modifier > 0 and isinstance(yards, int):
-            yards = max(0, int(yards * (1 - cov_modifier)))
+        if eff_cov > 0 and isinstance(yards, int):
+            yards = max(0, yards - eff_cov)
 
         # Rule 10: If pass yards would go past end zone, it's a TD
         # (yard_line not passed to this method, so this is handled by callers
@@ -1617,7 +1635,7 @@ class PlayResolver:
     def resolve_run_5e(self, fac_card: FACCard, deck: FACDeck,
                        rusher: PlayerCard,
                        play_direction: str = "IL",
-                       defense_run_stop: int = 50,
+                       defense_run_stop: int = 0,
                        defense_formation: str = "4_3") -> PlayResult:
         """Resolve a run play using 5th-edition FAC card mechanics.
 
@@ -1690,16 +1708,16 @@ class PlayResolver:
                     except (ValueError, TypeError):
                         yards = random.randint(1, 5)
 
-            # Defense run-stop modifier
-            def_modifier = (eff_run_stop - 50) / 100.0
-            yards = max(-5, int(yards - def_modifier * 2))
-            if eff_run_stop >= 80 and random.random() < (eff_run_stop - 75) / 100.0:
+            # Defense run-stop modifier (authentic 5E: tackle rating −5 to +4)
+            # Positive tackle = defense is better at stopping, reduces yards
+            yards = max(-5, int(yards - eff_run_stop))
+            if eff_run_stop >= 3 and random.random() < 0.15:
                 yards = min(yards, random.choice([-2, -1, 0]))
 
             # 5E Rule: Inside run max loss = 3 yards; no limit on sweep
             yards = self.apply_inside_run_max_loss(yards, play_direction)
 
-            if eff_run_stop >= 85 and random.random() < 0.03:
+            if eff_run_stop >= 3 and random.random() < 0.03:
                 recovery = Charts.roll_fumble_recovery()
                 fumble_yards, fumble_td = Charts.roll_fumble_return()
                 is_turnover = recovery == "DEFENSE"
@@ -1767,13 +1785,12 @@ class PlayResolver:
         yards = play_data.get("yards", 0)
         is_td = play_data.get("td", False)
 
-        # Defense run-stop modifier
-        def_modifier = (eff_run_stop - 50) / 100.0
+        # Defense run-stop modifier (authentic 5E small-number scale)
         if result_type in ("GAIN", "BREAKAWAY"):
-            yards = max(-5, int(yards - def_modifier * 2))
-            if eff_run_stop >= 80 and random.random() < (eff_run_stop - 75) / 100.0:
+            yards = max(-5, int(yards - eff_run_stop))
+            if eff_run_stop >= 3 and random.random() < 0.15:
                 yards = min(yards, random.choice([-2, -1, 0]))
-            if eff_run_stop >= 85 and result_type == "GAIN" and random.random() < 0.03:
+            if eff_run_stop >= 3 and result_type == "GAIN" and random.random() < 0.03:
                 result_type = "FUMBLE"
 
         # ── Out of bounds ────────────────────────────────────────────
@@ -1871,7 +1888,7 @@ class PlayResolver:
     def resolve_end_around(self, fac_card: FACCard, deck: FACDeck,
                            receiver: PlayerCard,
                            defense_formation: str = "4_3",
-                           defense_run_stop: int = 50) -> PlayResult:
+                           defense_run_stop: int = 0) -> PlayResult:
         """Resolve an end-around play (Rule 6).
 
         - Check ER info on FAC card: 'OK' = resolve as run using receiver's
@@ -2299,3 +2316,163 @@ class PlayResolver:
             result="FG_GOOD" if made else "FG_NO_GOOD",
             description=f"{kicker.player_name} {'makes' if made else 'misses'} {distance}-yard field goal",
         )
+
+    # ── Rule 11: Dropped Passes ──────────────────────────────────────
+
+    @staticmethod
+    def check_dropped_pass(run_number: int, receiver: PlayerCard) -> bool:
+        """Check if a completed pass is dropped (Rule 11).
+
+        In 5E, when the RN equals the receiver's game-use rating,
+        the pass is dropped (becomes incomplete).
+        """
+        game_use = getattr(receiver, 'endurance_rushing', None)
+        if game_use is not None and game_use >= 3 and run_number == game_use:
+            return True
+        return False
+
+    # ── Rule 5: Screen Pass Run Number Modifiers ─────────────────────
+
+    @staticmethod
+    def get_screen_run_modifier(defense_formation: str) -> int:
+        """Return run number modifier for screen passes (Rule 5).
+
+        Screen passes use the same modifiers as running plays:
+          Run Defense: +2 (no key), +4 (key on back)
+          Pass/Prevent: 0
+          Blitz: 0
+        """
+        form = defense_formation.lower() if defense_formation else ""
+        if "blitz" in form:
+            return 0
+        pass_forms = ("pass", "4_3_cover2", "nickel_zone", "nickel_cover2",
+                      "prevent", "3_4_zone")
+        if form in pass_forms or "prevent" in form:
+            return 0
+        # Run defense formations
+        return 2
+
+    # ── Rule 14: Within-20 Completion Modifier ───────────────────────
+
+    @staticmethod
+    def get_within_20_completion_modifier(yard_line: int) -> int:
+        """Return completion range modifier when inside opponent's 20 (Rule 14).
+
+        5E Rule: When inside the 20, Long passes have their completion
+        range reduced by -5 (compressed field).
+        """
+        if yard_line >= 80:
+            return -5
+        return 0
+
+    # ── Z Card Ignore Rules ──────────────────────────────────────────
+
+    @staticmethod
+    def should_ignore_z_card(play_context: str) -> bool:
+        """Return True if Z cards should be ignored in this context.
+
+        5E Rule: Z cards are ignored on:
+          - Onside kicks
+          - Extra points (XP)
+          - Fumble recovery plays
+          - Field goal attempts
+          - After touchdowns
+          - Incomplete passes (no fumble possible)
+        """
+        ignore_contexts = (
+            "ONSIDE_KICK", "XP", "EXTRA_POINT",
+            "FUMBLE_RECOVERY", "FG", "FIELD_GOAL",
+            "TOUCHDOWN", "TD", "INCOMPLETE",
+        )
+        return play_context.upper() in ignore_contexts
+
+    # ── Fumble Home Field Rule ───────────────────────────────────────
+
+    @staticmethod
+    def apply_fumble_home_field(is_home_team: bool, fumble_roll: int) -> str:
+        """Apply 5E home field advantage on fumble recovery.
+
+        The home team gets a +1 bonus on fumble recovery rolls.
+        Roll is 1-8: 1-4 = OFFENSE recovers, 5-8 = DEFENSE.
+        Home team bonus shifts the threshold.
+        """
+        if is_home_team:
+            # Home team (offense) recovers on 1-5 instead of 1-4
+            return "OFFENSE" if fumble_roll <= 5 else "DEFENSE"
+        return "OFFENSE" if fumble_roll <= 4 else "DEFENSE"
+
+    # ── Extra Pass Blocking (Optional Rule) ──────────────────────────
+
+    @staticmethod
+    def resolve_extra_pass_blocking(ol_pass_block_sum: int,
+                                     dl_pass_rush_sum: int,
+                                     extra_blocker_bv: int = 0) -> int:
+        """Resolve extra pass blocking (Optional Rule).
+
+        When a RB stays in to block, add their BV to the OL pass block sum.
+        Returns the net pass rush modifier.
+        """
+        total_block = ol_pass_block_sum + extra_blocker_bv
+        return (dl_pass_rush_sum - total_block) * 2
+
+    # ── Endurance 3 & 4 Rules ────────────────────────────────────────
+
+    def check_endurance_3_possession(self, player_name: str,
+                                      used_this_possession: set) -> bool:
+        """Check if a player with endurance 3 can be used (once per possession)."""
+        return player_name not in used_this_possession
+
+    def check_endurance_4_quarter(self, player_name: str,
+                                   used_this_quarter: set) -> bool:
+        """Check if a player with endurance 4 can be used (once per quarter)."""
+        return player_name not in used_this_quarter
+
+    # ── QB Endurance (A/B/C) ─────────────────────────────────────────
+
+    @staticmethod
+    def get_qb_endurance_modifier(qb: PlayerCard) -> int:
+        """Return completion range modifier for QB endurance.
+
+        5E QB Endurance:
+          A = no penalty (workhorse)
+          B = -2 to completion in 4th quarter
+          C = -4 to completion in 4th quarter
+        """
+        endurance = getattr(qb, 'endurance_passing', 'A')
+        if endurance == 'B':
+            return -2
+        if endurance == 'C':
+            return -4
+        return 0
+
+    # ── Endurance on Check-off Passes ────────────────────────────────
+
+    @staticmethod
+    def get_checkoff_endurance_modifier(receiver: PlayerCard) -> int:
+        """Return modifier for check-off passes to a receiver.
+
+        5E Rule: Endurance affects check-off passes — if receiver has
+        endurance >= 3, -3 to completion range on check-off.
+        """
+        endurance = getattr(receiver, 'endurance_rushing', 0)
+        if endurance >= 3:
+            return -3
+        return 0
+
+    # ── OL/CB/S Out of Position (Optional Rule) ─────────────────────
+
+    @staticmethod
+    def check_out_of_position_penalty(player: PlayerCard,
+                                       assigned_position: str) -> int:
+        """Return penalty for playing out of position (Optional Rule).
+
+        OL playing wrong slot: -1 to blocking value
+        CB/S playing wrong position: -1 to pass defense
+        """
+        natural_pos = getattr(player, 'position', '')
+        if natural_pos != assigned_position:
+            if natural_pos in ('LT', 'LG', 'C', 'RG', 'RT'):
+                return -1  # OL out of position
+            if natural_pos in ('CB', 'S', 'SS', 'FS'):
+                return -1  # DB out of position
+        return 0
