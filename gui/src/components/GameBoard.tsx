@@ -8,6 +8,7 @@ import { Gridiron } from './Gridiron';
 import { LetterBoards } from './LetterBoards';
 import { SubstitutionPanel } from './SubstitutionPanel';
 import { DiceRoller } from './DiceRoller';
+import { FACCardDisplay } from './FACCardDisplay';
 import type { DiceRollResult } from '../types/game';
 
 function formatDefenseFormation(formation?: string | null): string {
@@ -169,6 +170,9 @@ export function GameBoard({
           )}
 
           <DiceRoller lastDice={lastDice} loading={loading} onRoll={onRollDice} />
+          
+          {/* FAC Card Display (5E mode) */}
+          <FACCardDisplay lastPlay={lastPlay} />
         </div>
 
         <div className="board-right">

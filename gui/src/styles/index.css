@@ -1054,6 +1054,97 @@ body {
   cursor: not-allowed;
 }
 
+/* FAC Card Display */
+.fac-card-display {
+  margin: 1rem 0;
+}
+
+.fac-card {
+  background: var(--bg-card);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  box-shadow: var(--shadow);
+}
+
+.fac-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.fac-label {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.z-badge {
+  background: var(--red);
+  color: white;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.fac-card-body {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0;
+}
+
+.fac-field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.fac-field-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.fac-field-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.fac-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.fac-result {
+  font-weight: 600;
+  color: var(--green);
+}
+
+.fac-yards {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.fac-card-placeholder {
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 .btn-lg {
   padding: 0.75rem 1.5rem;
   font-size: 1rem;

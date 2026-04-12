@@ -31,6 +31,8 @@ export interface PlayResult {
   run_number?: number | null;
   pass_number?: number | null;
   defense_formation?: string | null;
+  fac_card_number?: number | null;
+  z_card?: boolean;
 }
 
 export interface DriveResult {
