@@ -20,6 +20,10 @@ export interface GameState {
   timeouts_away: number;
   last_plays: string[];
   injuries?: Record<string, number>;
+  penalties?: Record<string, number>;
+  penalty_yards?: Record<string, number>;
+  turnovers?: Record<string, number>;
+  player_stats?: Record<string, Record<string, number>>;
 }
 
 export interface PlayResult {
@@ -41,6 +45,8 @@ export interface PlayResult {
   passer?: string | null;
   rusher?: string | null;
   receiver?: string | null;
+  bv_tv_result?: { blocker_bv: number; defender_tv: number; modifier: number } | null;
+  interception_point?: number | null;
   debug_log?: string[];
 }
 

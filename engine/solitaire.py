@@ -136,10 +136,24 @@ class SolitaireAI:
                             "Short yardage in opponent territory, going for it")
 
         if fg_range and situation.yard_line >= 45:
+            # AI considers fake FG on 4th down if score is close and not in final 2 min
+            if (situation.time_remaining > 120
+                    and abs(situation.score_diff) <= 7
+                    and random.random() < 0.08):
+                return PlayCall("FG", "SHOTGUN", "MIDDLE",
+                                "Fake FG attempt (AI surprise play)",
+                                strategy="FAKE_FG")
             return PlayCall("FG", "SHOTGUN", "MIDDLE",
                             f"Field goal attempt from ~{100 - situation.yard_line} yards")
 
         if situation.yard_line <= 45:
+            # AI considers fake punt if behind and in opponent's half
+            if (situation.score_diff < 0
+                    and situation.yard_line >= 35
+                    and random.random() < 0.06):
+                return PlayCall("PUNT", "PUNT_FORMATION", "MIDDLE",
+                                "Fake punt attempt (AI surprise play)",
+                                strategy="FAKE_PUNT")
             return PlayCall("PUNT", "PUNT_FORMATION", "MIDDLE",
                             "Deep in own territory, punting")
 
@@ -149,8 +163,56 @@ class SolitaireAI:
 
         return PlayCall("PUNT", "PUNT_FORMATION", "MIDDLE", "Punting on 4th down")
 
+    def should_call_timeout(self, situation: GameSituation) -> bool:
+        """AI timeout management: determine if AI should call a timeout.
+
+        Returns True if the AI should call a timeout this play.
+        """
+        # Don't waste timeouts early
+        if situation.quarter <= 2 and situation.time_remaining > 120:
+            return False
+
+        # Trailing in Q4 with under 2 minutes, call timeout to save clock
+        if (situation.quarter == 4
+                and situation.time_remaining <= 120
+                and situation.score_diff < 0
+                and situation.timeouts_offense > 0):
+            return True
+
+        # End of half, defense wants to save time
+        if (situation.quarter == 2
+                and situation.time_remaining <= 60
+                and situation.score_diff >= 0
+                and situation.timeouts_defense > 0):
+            return random.random() < 0.5
+
+        return False
+
+    def should_use_big_play_defense(self, situation: GameSituation) -> bool:
+        """AI decides whether to activate Big Play Defense.
+
+        Returns True if conditions favor using BPD.
+        """
+        # Use BPD when trailing team has big-play opportunity
+        if situation.down >= 3 and situation.distance >= 15:
+            return random.random() < 0.6
+        if situation.yard_line >= 50 and situation.down == 1:
+            return random.random() < 0.15
+        return False
+
     def _call_two_minute_drill(self, situation: GameSituation,
                                dice_result: DiceResult) -> PlayCall:
+        """AI two-minute drill: pass-heavy with clock awareness."""
+        # Use quick passes to stop the clock when far from end zone
+        if situation.yard_line < 40:
+            if situation.distance > 10:
+                return PlayCall("LONG_PASS", "SHOTGUN",
+                                random.choice(["DEEP_LEFT", "DEEP_RIGHT"]),
+                                "Need big play in 2-minute drill")
+            return PlayCall("QUICK_PASS", "SHOTGUN",
+                            random.choice(["LEFT", "RIGHT"]),
+                            "Quick pass to stop clock in 2-minute drill")
+
         if situation.distance > 10:
             return PlayCall("LONG_PASS", "SHOTGUN",
                             random.choice(["DEEP_LEFT", "DEEP_RIGHT"]),
@@ -160,7 +222,9 @@ class SolitaireAI:
                             random.choice(["LEFT", "RIGHT", "MIDDLE"]),
                             "Moving chains in 2-minute drill")
         else:
-            return PlayCall("SHORT_PASS", "SHOTGUN",
+            # Short yardage: mix in screen/quick pass to move chains
+            play = random.choice(["SHORT_PASS", "QUICK_PASS", "SCREEN"])
+            return PlayCall(play, "SHOTGUN",
                             random.choice(["LEFT", "RIGHT"]),
                             "Short pass to get out of bounds")
 
@@ -320,26 +384,39 @@ class SolitaireAI:
                 # Pass-oriented defense codes
                 if code.startswith("P"):
                     play = random.choice([DefensivePlay.PASS_DEFENSE, DefensivePlay.PREVENT_DEFENSE])
-                    return (formation, play, DefensiveStrategy.NONE)
+                    # AI uses Double Coverage on 3rd/4th and long
+                    strategy = DefensiveStrategy.NONE
+                    if situation.down >= 3 and situation.distance >= 10:
+                        strategy = random.choice([DefensiveStrategy.DOUBLE_COVERAGE,
+                                                  DefensiveStrategy.NONE])
+                    return (formation, play, strategy)
 
         # Situational play calling
         if situation.down == 3 and situation.distance >= 10:
             play = DefensivePlay.PREVENT_DEFENSE
+            # AI uses coverage strategies on long-yardage situations
+            strategy = random.choice([DefensiveStrategy.DOUBLE_COVERAGE,
+                                      DefensiveStrategy.TRIPLE_COVERAGE,
+                                      DefensiveStrategy.NONE])
         elif situation.down == 3 and situation.distance >= 5:
             play = DefensivePlay.PASS_DEFENSE
+            strategy = random.choice([DefensiveStrategy.DOUBLE_COVERAGE,
+                                      DefensiveStrategy.NONE])
         elif situation.down <= 2 and situation.distance <= 3:
             play = random.choice([
                 DefensivePlay.RUN_DEFENSE_KEY_BACK_1,
                 DefensivePlay.RUN_DEFENSE_KEY_BACK_2,
             ])
+            strategy = DefensiveStrategy.NONE
         else:
             play = random.choice([
                 DefensivePlay.RUN_DEFENSE_NO_KEY,
                 DefensivePlay.PASS_DEFENSE,
                 DefensivePlay.RUN_DEFENSE_KEY_BACK_1,
             ])
+            strategy = DefensiveStrategy.NONE
 
-        return (formation, play, DefensiveStrategy.NONE)
+        return (formation, play, strategy)
 
     def call_offense_play_5e(self, situation: GameSituation,
                               fac_card: Optional[FACCard] = None

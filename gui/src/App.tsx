@@ -32,6 +32,8 @@ export default function App() {
     executeOnsideKick,
     executeSquibKick,
     executeTwoPointConversion,
+    activateBigPlayDefense,
+    declareTwoMinuteOffense,
     downloadGameLog,
     resetError,
     isHumanTurn,
@@ -42,8 +44,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'game' | 'cards'>('game');
   const [cardTeam, setCardTeam] = useState('KC');
 
-  const handleStartGame = async (homeTeam: string, awayTeam: string, mode: GameMode) => {
-    await startGame(homeTeam, awayTeam, mode);
+  const handleStartGame = async (homeTeam: string, awayTeam: string, mode: GameMode, seed?: number, use5e?: boolean) => {
+    await startGame(homeTeam, awayTeam, mode, seed, use5e);
     setPhase('playing');
     setCardTeam(homeTeam);
   };
@@ -112,6 +114,8 @@ export default function App() {
                 onOnsideKick={executeOnsideKick}
                 onSquibKick={executeSquibKick}
                 onTwoPointConversion={executeTwoPointConversion}
+                onBigPlayDefense={activateBigPlayDefense}
+                onTwoMinuteOffense={declareTwoMinuteOffense}
                 onDownloadGameLog={downloadGameLog}
                 onNewGame={handleNewGame}
               />

@@ -23,7 +23,7 @@ interface UseGameEngineReturn {
   personnel: PersonnelData | null;
   loading: boolean;
   error: string | null;
-  startGame: (homeTeam: string, awayTeam: string, mode: GameMode) => Promise<void>;
+  startGame: (homeTeam: string, awayTeam: string, mode: GameMode, seed?: number, use5e?: boolean) => Promise<void>;
   executePlay: () => Promise<void>;
   executeHumanPlay: (call: HumanPlayCall) => Promise<void>;
   executeHumanDefense: (call: DefensivePlayCall) => Promise<void>;
@@ -39,6 +39,8 @@ interface UseGameEngineReturn {
   executeOnsideKick: (onsideDefense?: boolean) => Promise<void>;
   executeSquibKick: () => Promise<void>;
   executeTwoPointConversion: (playType: string) => Promise<void>;
+  activateBigPlayDefense: () => Promise<void>;
+  declareTwoMinuteOffense: () => Promise<void>;
   downloadGameLog: () => void;
   resetError: () => void;
   isHumanTurn: () => boolean;
@@ -66,18 +68,21 @@ export function useGameEngine(): UseGameEngineReturn {
     }
   };
 
-  const startGame = useCallback(async (homeTeam: string, awayTeam: string, mode: GameMode) => {
+  const startGame = useCallback(async (homeTeam: string, awayTeam: string, mode: GameMode, seed?: number, use5e?: boolean) => {
     setLoading(true);
     setError(null);
     try {
       const solHome = mode !== 'human_home';
       const solAway = mode !== 'human_away';
-      const res = await axios.post(`${API_BASE}/games/new`, {
+      const payload: Record<string, unknown> = {
         home_team: homeTeam,
         away_team: awayTeam,
         solitaire_home: solHome,
         solitaire_away: solAway,
-      });
+      };
+      if (seed !== undefined) payload.seed = seed;
+      if (use5e !== undefined) payload.use_5e = use5e;
+      const res = await axios.post(`${API_BASE}/games/new`, payload);
       setGameId(res.data.game_id);
       setGameState(res.data.state);
       setGameMode(mode);
@@ -385,6 +390,36 @@ export function useGameEngine(): UseGameEngineReturn {
     }
   }, [gameId]);
 
+  const activateBigPlayDefense = useCallback(async () => {
+    if (!gameId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/games/${gameId}/big-play-defense`, {
+        team: 'defense',
+      });
+      setGameState(res.data.state);
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [gameId]);
+
+  const declareTwoMinuteOffense = useCallback(async () => {
+    if (!gameId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/games/${gameId}/two-minute-offense`);
+      setGameState(res.data.state);
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [gameId]);
+
   return {
     gameId,
     gameState,
@@ -411,6 +446,8 @@ export function useGameEngine(): UseGameEngineReturn {
     executeOnsideKick,
     executeSquibKick,
     executeTwoPointConversion,
+    activateBigPlayDefense,
+    declareTwoMinuteOffense,
     downloadGameLog,
     resetError,
     isHumanTurn,

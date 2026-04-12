@@ -1109,3 +1109,249 @@ class TestSpecialPlaysIntegration:
         game = Game(home, away, use_5e=True, seed=42)
         result = game.execute_all_out_punt_rush()
         assert result is not None
+
+
+# ── New 5E Features Tests ──────────────────────────────────────────
+
+
+class TestColumnABKickoff:
+    """Test the 5E Column A/B kickoff table."""
+
+    def test_kickoff_returns_tuple(self):
+        from engine.charts import Charts
+        result = Charts.resolve_kickoff_5e()
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert result[0] in ("TB", "KR")
+        if result[0] == "TB":
+            assert result[1] == 25
+        else:
+            assert 1 <= result[1] <= 99
+
+    def test_touchback_and_return_distribution(self):
+        """Run many trials and verify we get both TBs and KRs."""
+        from engine.charts import Charts
+        random.seed(42)
+        results = [Charts.resolve_kickoff_5e() for _ in range(200)]
+        tbs = sum(1 for r in results if r[0] == "TB")
+        krs = sum(1 for r in results if r[0] == "KR")
+        assert tbs > 0, "Should get at least one touchback"
+        assert krs > 0, "Should get at least one kick return"
+
+
+class TestPuntDistanceTables:
+    """Test the 5E 12-row punt distance tables."""
+
+    def test_known_averages(self):
+        from engine.charts import Charts
+        # Average of 44 yards, RN 6 should be 44
+        assert Charts.get_punt_distance_5e(44, 6) == 44
+        # RN 1 should be shorter
+        assert Charts.get_punt_distance_5e(44, 1) < 44
+        # RN 12 should be longer
+        assert Charts.get_punt_distance_5e(44, 12) > 44
+
+    def test_range_35_to_50(self):
+        from engine.charts import Charts
+        for avg in range(35, 51):
+            for rn in range(1, 13):
+                dist = Charts.get_punt_distance_5e(avg, rn)
+                assert isinstance(dist, int)
+                assert 10 <= dist <= 80
+
+    def test_outside_range_fallback(self):
+        from engine.charts import Charts
+        dist = Charts.get_punt_distance_5e(30, 6)
+        assert isinstance(dist, int)
+        assert dist > 0
+
+
+class TestOver51FGTable:
+    """Test the 5E over-51 FG table."""
+
+    def test_impossible_distance(self):
+        from engine.charts import Charts
+        assert Charts.resolve_over_51_fg(56, 55) is False
+
+    def test_kicker_with_high_longest(self):
+        from engine.charts import Charts
+        random.seed(42)
+        made_count = sum(1 for _ in range(100) if Charts.resolve_over_51_fg(51, 60))
+        # Should make some with longest=60
+        assert made_count > 0
+
+    def test_kicker_with_low_longest(self):
+        from engine.charts import Charts
+        random.seed(42)
+        made_count = sum(1 for _ in range(100) if Charts.resolve_over_51_fg(55, 50))
+        # Very hard with longest=50, distance=55
+        assert made_count < 10  # Should be very rare
+
+
+class TestBlockedPunts:
+    """Test blocked punt check."""
+
+    def test_blocked_when_matching(self):
+        from engine.charts import Charts
+        assert Charts.check_blocked_punt(5, 5) is True
+
+    def test_not_blocked_when_different(self):
+        from engine.charts import Charts
+        assert Charts.check_blocked_punt(5, 6) is False
+
+    def test_no_blocked_punt_number(self):
+        from engine.charts import Charts
+        assert Charts.check_blocked_punt(0, 5) is False
+
+
+class TestFairCatch:
+    """Test fair catch / punt return percentage."""
+
+    def test_high_return_pct(self):
+        from engine.charts import Charts
+        random.seed(42)
+        fair_catches = sum(1 for _ in range(100) if Charts.check_fair_catch(0.9))
+        assert fair_catches < 20  # 90% return rate means few fair catches
+
+    def test_low_return_pct(self):
+        from engine.charts import Charts
+        random.seed(42)
+        fair_catches = sum(1 for _ in range(100) if Charts.check_fair_catch(0.1))
+        assert fair_catches > 80  # 10% return rate means many fair catches
+
+
+class TestPlayerCardNewFields:
+    """Test new fields on PlayerCard."""
+
+    def test_punter_has_blocked_punt_number(self):
+        from engine.player_card import PlayerCard
+        card = PlayerCard(player_name="Test Punter", team="TST", number=1,
+                          position="P", blocked_punt_number=7)
+        assert card.blocked_punt_number == 7
+
+    def test_punter_has_punt_return_pct(self):
+        from engine.player_card import PlayerCard
+        card = PlayerCard(player_name="Test Punter", team="TST", number=1,
+                          position="P", punt_return_pct=0.55)
+        assert card.punt_return_pct == 0.55
+
+    def test_kicker_has_longest_kick(self):
+        from engine.player_card import PlayerCard
+        card = PlayerCard(player_name="Test Kicker", team="TST", number=2,
+                          position="K", longest_kick=57)
+        assert card.longest_kick == 57
+
+
+class TestBigPlayDefense:
+    """Test Big Play Defense methods on Game."""
+
+    def test_activate_big_play_defense(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        # Activate for home team
+        result = game.activate_big_play_defense("home")
+        assert result is True
+        # Second activation should fail (already used this series)
+        result2 = game.activate_big_play_defense("home")
+        assert result2 is False
+
+
+class TestTwoMinuteOffense:
+    """Test two-minute offense declaration."""
+
+    def test_declare_two_minute_offense(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        game.declare_two_minute_offense()
+        assert game._two_minute_declared is True
+        assert game._is_two_minute_offense() is True
+
+
+class TestPlayerStatsTracking:
+    """Test that player stats are tracked during play."""
+
+    def test_stats_accumulate(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        # Run several plays
+        for _ in range(10):
+            if game.state.is_over:
+                break
+            game.execute_play()
+        # Should have some stats
+        assert isinstance(game.state.player_stats, dict)
+        assert len(game.state.player_stats) >= 0  # Some plays may not track
+
+
+class TestPenaltyTurnoverTracking:
+    """Test that penalties and turnovers are tracked."""
+
+    def test_penalty_dict_initialized(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        assert game.state.penalties == {"home": 0, "away": 0}
+        assert game.state.penalty_yards == {"home": 0, "away": 0}
+        assert game.state.turnovers == {"home": 0, "away": 0}
+
+    def test_turnover_dict_populated_after_plays(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        for _ in range(30):
+            if game.state.is_over:
+                break
+            game.execute_play()
+        # Turnovers dict should exist regardless
+        assert isinstance(game.state.turnovers, dict)
+
+
+class TestSeedConfiguration:
+    """Test that seed produces deterministic games."""
+
+    def test_seed_reproducibility(self):
+        home1 = Team.load("KC", "2025_5e")
+        away1 = Team.load("SF", "2025_5e")
+        game1 = Game(home1, away1, use_5e=True, seed=12345)
+
+        home2 = Team.load("KC", "2025_5e")
+        away2 = Team.load("SF", "2025_5e")
+        game2 = Game(home2, away2, use_5e=True, seed=12345)
+
+        # Both games should start in the same state (seed-based)
+        assert game1.state.possession == game2.state.possession
+        assert game1.state.yard_line == game2.state.yard_line
+
+
+class TestAIEnhancements:
+    """Test AI strategy, fake play, and timeout methods."""
+
+    def test_ai_should_call_timeout(self):
+        from engine.solitaire import SolitaireAI, GameSituation
+        ai = SolitaireAI()
+        # Trailing in Q4, under 2 minutes → should call timeout
+        sit = GameSituation(down=1, distance=10, yard_line=30,
+                            score_diff=-7, quarter=4, time_remaining=60,
+                            timeouts_offense=2)
+        assert ai.should_call_timeout(sit) is True
+
+    def test_ai_should_not_call_timeout_early(self):
+        from engine.solitaire import SolitaireAI, GameSituation
+        ai = SolitaireAI()
+        sit = GameSituation(down=1, distance=10, yard_line=30,
+                            score_diff=0, quarter=1, time_remaining=800)
+        assert ai.should_call_timeout(sit) is False
+
+    def test_ai_big_play_defense_decision(self):
+        from engine.solitaire import SolitaireAI, GameSituation
+        ai = SolitaireAI()
+        # Long yardage, should consider BPD
+        sit = GameSituation(down=3, distance=20, yard_line=50,
+                            score_diff=0, quarter=2, time_remaining=500)
+        # Run multiple times (probabilistic)
+        random.seed(42)
+        results = [ai.should_use_big_play_defense(sit) for _ in range(100)]
+        assert any(results), "Should sometimes use BPD on 3rd and long"

@@ -62,6 +62,8 @@ class PlayResult:
     offensive_play_call: Optional[str] = None   # Display string for offensive call
     defensive_play_call: Optional[str] = None   # Display string for defensive call
     defensive_play: Optional[str] = None        # DefensivePlay value used
+    bv_tv_result: Optional[Dict[str, Any]] = None  # BV vs TV battle details
+    interception_point: Optional[int] = None    # Yard line where INT occurred
     debug_log: List[str] = field(default_factory=list)  # Step-by-step resolution log
 
 

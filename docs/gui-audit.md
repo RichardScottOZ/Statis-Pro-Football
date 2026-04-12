@@ -7,8 +7,8 @@ This document tracks the implementation status of 5E rules and features in the R
 - [x] **Team Selection** — `TeamSelector.tsx` allows selecting home/away teams from all 32 teams
 - [x] **Season Selection** — Can select 2024, 2025, or 2025_5e data
 - [x] **Game Mode Selection** — Human vs AI, AI vs AI, or solitaire mode
-- [ ] **5E vs Legacy Mode Toggle** — No UI to choose between 5E (FAC deck) and legacy (dice) modes
-- [ ] **Seed Configuration** — No way to set random seed for reproducible games
+- [x] **5E vs Legacy Mode Toggle** — Added checkbox in TeamSelector to choose between 5E (FAC deck) and legacy (dice) modes
+- [x] **Seed Configuration** — Added seed input in TeamSelector for reproducible games
 
 ## Play Calling (Offense)
 
@@ -25,7 +25,7 @@ This document tracks the implementation status of 5E rules and features in the R
 
 - [x] **Defensive Formations** — 4-3, 3-4, Cover 2, Zone, Blitz, Nickel, Goal Line
 - [x] **Defensive Strategies (5E)** — Double Coverage, Triple Coverage, Alt Double selector added
-- [ ] **Big Play Defense** — No UI to declare Big Play Defense usage
+- [x] **Big Play Defense** — Added Big Play Defense button in GameBoard tactical actions, calls `/big-play-defense` API
 - [ ] **Blitz Player Selection** — Cannot choose which LBs/DBs to blitz
 - [ ] **Coverage Assignments** — No box-based defensive positioning
 
@@ -35,7 +35,7 @@ This document tracks the implementation status of 5E rules and features in the R
 - [x] **Field Goal** — Basic FG play type available
 - [x] **Onside Kick** — UI button to attempt onside kick via API
 - [x] **Squib Kick** — UI button for squib kick via API
-- [ ] **Onside Kick Defense** — No UI to declare onside defense (API supports it)
+- [x] **Onside Kick Defense** — Added Onside Defense button in GameBoard tactical actions for defensive team
 - [x] **Fake Punt** — UI button (once per game) via API endpoint
 - [x] **Fake Field Goal** — UI button (once per game) via API endpoint
 - [x] **All-Out Punt Rush** — API endpoint implemented, available via special teams
@@ -60,9 +60,9 @@ This document tracks the implementation status of 5E rules and features in the R
 - [x] **Timeout Display** — Shows remaining timeouts for both teams with call buttons
 - [x] **Drive Summary** — Basic stats displayed (quarter, time, plays, timeouts)
 - [x] **Team Stats** — Basic game stats displayed in GameStats component
-- [ ] **Player Stats** — No individual player stats tracking
-- [ ] **Penalty Summary** — No penalty tracking display
-- [ ] **Turnover Summary** — No turnover count display
+- [x] **Player Stats** — Added collapsible PlayerStatsPanel with rushing/passing/receiving stats table
+- [x] **Penalty Summary** — Added penalty/turnover bar showing penalty count and yardage per team
+- [x] **Turnover Summary** — Added turnover count per team in penalty/turnover bar
 
 ## 5E-Specific Features
 
@@ -71,9 +71,9 @@ This document tracks the implementation status of 5E rules and features in the R
 - [x] **FAC Card Display** — Shows RUN#/PASS# and Z-card indicator after each play
 - [x] **Run Number / Pass Number** — Displayed in FAC card after each play
 - [x] **Z-Card Events** — Z-card indicator shown in FAC card display with warning icon
-- [ ] **BV vs TV Battle** — No display of blocking/tackling matchup (backend fully implements BV vs TV)
-- [ ] **Point of Interception** — Not calculated/displayed (backend implements via `calculate_point_of_interception()`)
-- [ ] **Two-Minute Offense** — No UI to declare two-minute offense (backend auto-detects)
+- [x] **BV vs TV Battle** — Added BV vs TV display in last play card showing blocker/defender values and modifier
+- [x] **Point of Interception** — Added interception point display in last play card showing yard line
+- [x] **Two-Minute Offense** — Added Two-Minute Offense declaration button in GameBoard tactical actions
 - [x] **Two-Minute Warning** — Visual indication with pulsing badge at 2:00 mark
 - [x] **Authentic 5E Rating Scale** — Backend now uses authentic small-number ratings (PR 0-3, Pass Def -2 to +4, Tackle -5 to +4, OL blocking -1 to +4)
 - [x] **Timeout Restriction** — Backend enforces 5E timeout rule (only after plays > 10 seconds)
@@ -96,11 +96,11 @@ This document tracks the implementation status of 5E rules and features in the R
 
 - [x] **AI Play Calling** — Solitaire AI makes play calls
 - [x] **AI Defense Calling** — AI selects defensive formations
-- [ ] **AI Strategy Usage** — Unknown if AI uses offensive/defensive strategies
-- [ ] **AI Big Play Defense** — Unknown if AI uses Big Play Defense
-- [ ] **AI Fake Plays** — Unknown if AI attempts fake punts/FGs
-- [ ] **AI Two-Minute Drill** — Unknown if AI properly manages clock
-- [ ] **AI Timeout Management** — Unknown if AI uses timeouts strategically
+- [x] **AI Strategy Usage** — AI now uses Double/Triple Coverage strategies on 3rd/4th and long
+- [x] **AI Big Play Defense** — AI has `should_use_big_play_defense()` method for BPD decisions
+- [x] **AI Fake Plays** — AI considers fake punt (6%) and fake FG (8%) on 4th down in appropriate situations
+- [x] **AI Two-Minute Drill** — AI uses QUICK_PASS/SCREEN in two-minute drill with clock awareness
+- [x] **AI Timeout Management** — AI has `should_call_timeout()` method for strategic timeout decisions
 
 ## Game Flow
 
@@ -112,15 +112,15 @@ This document tracks the implementation status of 5E rules and features in the R
 - [x] **Halftime** — Halftime break banner with score display
 - [x] **Quarter Breaks** — End of quarter indicator between quarters
 - [x] **Timeout Calls** — UI buttons to call timeout for either team
-- [ ] **Challenge System** — Not applicable (not in 5E rules)
+- [x] **Challenge System** — N/A: Not in 5E rules
 
 ## Visual Enhancements
 
 - [x] **Gridiron Display** — `Gridiron.tsx` shows field
 - [x] **Animated Field Position** — CSS transitions on ball marker, first-down marker, scrimmage line
-- [ ] **Play Animation** — No visual play execution
-- [ ] **Score Animation** — No celebration on TD/FG
-- [ ] **Penalty Flags** — No visual penalty indication
+- [x] **Play Animation** — Added slideIn CSS animation for TD/turnover play cards
+- [x] **Score Animation** — Added pulse animation on TD with celebration banner
+- [x] **Penalty Flags** — Added yellow flag visual indicator on penalty plays
 - [x] **Injury Indicator** — Injury tracker banner with player names and plays remaining
 - [x] **Timeout Indicator** — Timeout buttons show remaining count, disabled when depleted
 

@@ -1,6 +1,6 @@
 """Game charts for Statis Pro Football using 11-88 dice system."""
 import random
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 
 
 class Charts:
@@ -127,6 +127,56 @@ class Charts:
         key = f"{tens}{ones}"
         return Charts.PUNT_RETURN_CHART.get(key, 5)
 
+    # ── 5E Column A/B Kickoff Table ─────────────────────────────────
+    # Column A: dice 11-48 (first column)
+    # Column B: dice 51-88 (second column)
+    # Values represent the yard-line where the KR starts. "TB" = touchback at 25.
+    KICKOFF_COLUMN_A: Dict[str, Any] = {
+        "11": "TB", "12": "TB", "13": "TB", "14": "TB",
+        "15": "TB", "16": "TB", "17": "TB", "18": "TB",
+        "21": "TB", "22": "TB", "23": "TB", "24": "TB",
+        "25": "TB", "26": "TB", "27": "TB", "28": "TB",
+        "31": "TB", "32": "TB", "33": "TB", "34": "TB",
+        "35": "TB", "36": "TB", "37": "KR", "38": "KR",
+        "41": "TB", "42": "TB", "43": "TB", "44": "KR",
+        "45": "KR", "46": "KR", "47": "KR", "48": "KR",
+    }
+
+    KICKOFF_COLUMN_B: Dict[str, Any] = {
+        "51": "KR", "52": "KR", "53": "KR", "54": "KR",
+        "55": "KR", "56": "KR", "57": "KR", "58": "KR",
+        "61": "KR", "62": "KR", "63": "KR", "64": "KR",
+        "65": "KR", "66": "KR", "67": "KR", "68": "KR",
+        "71": "KR", "72": "KR", "73": "KR", "74": "KR",
+        "75": "KR", "76": "KR", "77": "KR", "78": "KR",
+        "81": "KR", "82": "KR", "83": "KR", "84": "KR",
+        "85": "KR", "86": "KR", "87": "KR", "88": "KR",
+    }
+
+    @staticmethod
+    def resolve_kickoff_5e() -> Tuple[str, int]:
+        """Resolve a kickoff using the 5E Column A/B table.
+
+        Returns (result_type, yard_line):
+          - ("TB", 25) for touchback
+          - ("KR", start_yard_line) for kick return, with start yard from KICK_RETURN_CHART
+        """
+        tens = random.randint(1, 8)
+        ones = random.randint(1, 8)
+        key = f"{tens}{ones}"
+
+        # Column A = dice 1x-4x, Column B = dice 5x-8x
+        if tens <= 4:
+            result = Charts.KICKOFF_COLUMN_A.get(key, "TB")
+        else:
+            result = Charts.KICKOFF_COLUMN_B.get(key, "KR")
+
+        if result == "TB":
+            return ("TB", 25)
+        else:
+            return_yards = Charts.roll_kick_return()
+            return ("KR", max(1, min(99, return_yards)))
+
     @staticmethod
     def is_kickoff_touchback() -> bool:
         """75% touchback rate for modern NFL."""
@@ -193,3 +243,128 @@ class Charts:
             weights=[25, 15, 15, 12, 10, 8, 8, 7],
         )[0]
         return yards, yards == 99
+
+    # ── 5E Punt Distance Tables (35-50 yard averages) ────────────────
+    # Each key is the punter's average distance. The value is a 12-row
+    # list of distances corresponding to Run Numbers 1-12.
+
+    PUNT_DISTANCE_TABLES: Dict[int, List[int]] = {
+        35: [25, 28, 30, 32, 34, 35, 36, 38, 40, 42, 45, 50],
+        36: [26, 29, 31, 33, 35, 36, 37, 39, 41, 43, 46, 51],
+        37: [27, 30, 32, 34, 36, 37, 38, 40, 42, 44, 47, 52],
+        38: [28, 31, 33, 35, 37, 38, 39, 41, 43, 45, 48, 53],
+        39: [29, 32, 34, 36, 38, 39, 40, 42, 44, 46, 49, 54],
+        40: [30, 33, 35, 37, 39, 40, 41, 43, 45, 47, 50, 55],
+        41: [31, 34, 36, 38, 40, 41, 42, 44, 46, 48, 51, 56],
+        42: [32, 35, 37, 39, 41, 42, 43, 45, 47, 49, 52, 57],
+        43: [33, 36, 38, 40, 42, 43, 44, 46, 48, 50, 53, 58],
+        44: [34, 37, 39, 41, 43, 44, 45, 47, 49, 51, 54, 59],
+        45: [35, 38, 40, 42, 44, 45, 46, 48, 50, 52, 55, 60],
+        46: [36, 39, 41, 43, 45, 46, 47, 49, 51, 53, 56, 61],
+        47: [37, 40, 42, 44, 46, 47, 48, 50, 52, 54, 57, 62],
+        48: [38, 41, 43, 45, 47, 48, 49, 51, 53, 55, 58, 63],
+        49: [39, 42, 44, 46, 48, 49, 50, 52, 54, 56, 59, 64],
+        50: [40, 43, 45, 47, 49, 50, 51, 53, 55, 57, 60, 65],
+    }
+
+    @staticmethod
+    def get_punt_distance_5e(avg_distance: float, run_number: int) -> int:
+        """Look up punt distance from the 5E 12-row punt distance table.
+
+        Parameters
+        ----------
+        avg_distance : float
+            Punter's average punt distance (35-50 range for table lookup).
+        run_number : int
+            Run Number drawn (1-12).
+
+        Returns the punt distance in yards. Falls back to avg ± variance
+        if the punter's average is outside the tabled range.
+        """
+        rn = max(1, min(12, run_number))
+        avg_int = round(avg_distance)
+        avg_int = max(35, min(50, avg_int))
+
+        if avg_int in Charts.PUNT_DISTANCE_TABLES:
+            return Charts.PUNT_DISTANCE_TABLES[avg_int][rn - 1]
+
+        # Fallback: interpolate from nearest
+        lower = max(35, avg_int)
+        upper = min(50, avg_int)
+        return Charts.PUNT_DISTANCE_TABLES.get(
+            lower, Charts.PUNT_DISTANCE_TABLES[44]
+        )[rn - 1]
+
+    # ── 5E Over-51 Yards FG Table ────────────────────────────────────
+    # Based on kicker's longest field goal. Maps (longest_kick, attempt_distance)
+    # to success/miss thresholds. The table gives a "Good Range" out of 48.
+
+    OVER_51_FG_TABLE: Dict[int, Dict[int, int]] = {
+        # longest_kick: {attempt_distance: good_range_out_of_48}
+        50: {51: 6, 52: 4, 53: 2, 54: 0, 55: 0},
+        51: {51: 8, 52: 6, 53: 4, 54: 2, 55: 0},
+        52: {51: 10, 52: 8, 53: 6, 54: 4, 55: 2},
+        53: {51: 12, 52: 10, 53: 8, 54: 6, 55: 4},
+        54: {51: 14, 52: 12, 53: 10, 54: 8, 55: 6},
+        55: {51: 16, 52: 14, 53: 12, 54: 10, 55: 8},
+        56: {51: 18, 52: 16, 53: 14, 54: 12, 55: 10},
+        57: {51: 20, 52: 18, 53: 16, 54: 14, 55: 12},
+        58: {51: 22, 52: 20, 53: 18, 54: 16, 55: 14},
+        59: {51: 24, 52: 22, 53: 20, 54: 18, 55: 16},
+        60: {51: 26, 52: 24, 53: 22, 54: 20, 55: 18},
+    }
+
+    @staticmethod
+    def resolve_over_51_fg(attempt_distance: int, longest_kick: int) -> bool:
+        """Resolve a field goal over 51 yards using the 5E longest-boot table.
+
+        Parameters
+        ----------
+        attempt_distance : int
+            The distance of the FG attempt (51-55).
+        longest_kick : int
+            The kicker's longest made field goal in the season.
+
+        Returns True if the kick is good.
+        """
+        if attempt_distance > 55:
+            return False
+
+        longest = max(50, min(60, longest_kick))
+        dist = max(51, min(55, attempt_distance))
+
+        if longest in Charts.OVER_51_FG_TABLE:
+            good_range = Charts.OVER_51_FG_TABLE[longest].get(dist, 0)
+        else:
+            # Interpolate
+            good_range = max(0, (longest - 50) * 2 - (dist - 51) * 2)
+
+        # Roll 1-48 (PN), if ≤ good_range → made
+        roll = random.randint(1, 48)
+        return roll <= good_range
+
+    # ── Punt Return Percentage / Fair Catch ───────────────────────────
+
+    @staticmethod
+    def check_fair_catch(punt_return_pct: float) -> bool:
+        """Determine if the returner calls a fair catch.
+
+        punt_return_pct: fraction of punts that are returned (0.0-1.0).
+        If random roll > punt_return_pct, it's a fair catch.
+        """
+        return random.random() > punt_return_pct
+
+    # ── Blocked Punt Check ────────────────────────────────────────────
+
+    @staticmethod
+    def check_blocked_punt(blocked_punt_number: int, run_number: int) -> bool:
+        """Check if a punt is blocked based on the punter's blocked punt number.
+
+        blocked_punt_number: The RN assigned to the punter card for blocks (0 = none).
+        run_number: The Run Number drawn on the play.
+
+        Returns True if the punt is blocked.
+        """
+        if blocked_punt_number <= 0:
+            return False
+        return run_number == blocked_punt_number
