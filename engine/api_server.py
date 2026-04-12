@@ -54,6 +54,10 @@ def _serialize_play_result(result) -> dict:
         "offensive_play_call": result.offensive_play_call,
         "defensive_play_call": result.defensive_play_call,
         "defensive_play": result.defensive_play,
+        "passer": result.passer,
+        "rusher": result.rusher,
+        "receiver": result.receiver,
+        "debug_log": getattr(result, 'debug_log', []),
     }
 
 

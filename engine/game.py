@@ -768,6 +768,11 @@ class Game:
 
         self.state.play_log.append(f"  → {result.description}")
 
+        # ── Append debug log from resolver to play log ────────────────
+        if hasattr(result, 'debug_log') and result.debug_log:
+            for dl_entry in result.debug_log:
+                self.state.play_log.append(f"    {dl_entry}")
+
         # ── Attach 5E play call info to result ────────────────────────
         result.offensive_play_call = off_call_str
         result.defensive_play_call = def_call_str
