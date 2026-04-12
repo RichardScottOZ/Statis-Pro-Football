@@ -134,6 +134,9 @@ export interface PersonnelData {
   offense_starters: Record<string, PlayerBrief>;
   offense_receivers: PlayerBrief[];
   defense_players: PlayerBrief[];
+  defense_line: PlayerBrief[];
+  linebackers: PlayerBrief[];
+  defensive_backs: PlayerBrief[];
   offense_all: PlayerBrief[];
   defense_all: PlayerBrief[];
 }

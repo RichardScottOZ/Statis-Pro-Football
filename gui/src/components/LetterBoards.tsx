@@ -6,228 +6,165 @@ interface LetterBoardsProps {
   possession: string;
 }
 
-/** Compact table for 12-row rushing or pass-gain data. */
-function ThreeColumnTable({
-  rows,
-  headers,
-  label,
-}: {
-  rows: (number[] | null)[];
-  headers: [string, string, string];
-  label: string;
-}) {
-  if (!rows || rows.length === 0) return null;
-  return (
-    <div className="card-table">
-      <div className="card-table-label">{label}</div>
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>{headers[0]}</th>
-            <th>{headers[1]}</th>
-            <th>{headers[2]}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}>
-              <td className="row-num">{i + 1}</td>
-              <td>{row ? row[0] : '—'}</td>
-              <td>{row ? row[1] : '—'}</td>
-              <td>{row ? row[2] : '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+/* ─── Compact inline card for a single player ─────────────────── */
 
-/** QB passing ranges display */
-function PassRangesDisplay({ player }: { player: PlayerBrief }) {
-  if (!player.passing_quick && !player.passing_short && !player.passing_long) return null;
-
-  const ranges = [
-    { label: 'Quick', data: player.passing_quick },
-    { label: 'Short', data: player.passing_short },
-    { label: 'Long', data: player.passing_long },
-  ];
-
-  return (
-    <div className="card-table">
-      <div className="card-table-label">Passing Ranges (1-48)</div>
-      <table>
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>COM</th>
-            <th>INC</th>
-            <th>INT</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ranges.map((r) => {
-            if (!r.data) return null;
-            const com = r.data.com_max;
-            const inc = r.data.inc_max - r.data.com_max;
-            const int_ = 48 - r.data.inc_max;
-            return (
-              <tr key={r.label}>
-                <td className="row-label">{r.label}</td>
-                <td className="pass-com">1-{com}</td>
-                <td className="pass-inc">{com + 1}-{r.data.inc_max}</td>
-                <td className="pass-int">{int_ > 0 ? `${r.data.inc_max + 1}-48` : '—'}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {player.pass_rush && (
-        <div className="pass-rush-info">
-          Pass Rush: Sack 1-{player.pass_rush.sack_max} |
-          Runs {player.pass_rush.sack_max + 1}-{player.pass_rush.runs_max} |
-          Com {player.pass_rush.runs_max + 1}-{player.pass_rush.com_max} |
-          Inc {player.pass_rush.com_max + 1}-48
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Defensive ratings display */
-function DefenseRatings({ player }: { player: PlayerBrief }) {
-  const hasRatings =
-    player.pass_rush_rating > 0 ||
-    player.coverage_rating > 0 ||
-    player.run_stop_rating > 0;
-  if (!hasRatings) return null;
-
-  return (
-    <div className="defense-ratings">
-      <div className="rating-bar">
-        <span className="rating-label">Rush</span>
-        <div className="rating-fill" style={{ width: `${player.pass_rush_rating}%` }} />
-        <span className="rating-value">{player.pass_rush_rating}</span>
-      </div>
-      <div className="rating-bar">
-        <span className="rating-label">Cov</span>
-        <div className="rating-fill coverage" style={{ width: `${player.coverage_rating}%` }} />
-        <span className="rating-value">{player.coverage_rating}</span>
-      </div>
-      <div className="rating-bar">
-        <span className="rating-label">Stop</span>
-        <div className="rating-fill run-stop" style={{ width: `${player.run_stop_rating}%` }} />
-        <span className="rating-value">{player.run_stop_rating}</span>
-      </div>
-    </div>
-  );
-}
-
-function PlayerChip({
-  player,
-  highlight,
-  expanded,
-  onToggle,
-}: {
-  player: PlayerBrief;
-  highlight?: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
+function MiniCard({ player, isDefender }: { player: PlayerBrief; isDefender?: boolean }) {
   const gradeClass =
     player.overall_grade === 'A' ? 'grade-a' :
     player.overall_grade === 'B' ? 'grade-b' :
     player.overall_grade === 'D' ? 'grade-d' : 'grade-c';
 
-  const isDefender = ['DEF', 'DL', 'LB', 'CB', 'S'].includes(player.position);
-
   return (
-    <div className={`player-chip-wrap ${expanded ? 'expanded' : ''}`}>
-      <div
-        className={`player-chip ${highlight ? 'chip-highlight' : ''}`}
-        onClick={onToggle}
-        role="button"
-        tabIndex={0}
-      >
-        <span className="chip-pos">{player.position}</span>
-        <span className="chip-number">#{player.number}</span>
-        <span className="chip-name">{player.name}</span>
+    <div className={`mini-card ${isDefender ? 'mini-card-def' : 'mini-card-off'}`}>
+      {/* Header: position + name + grade */}
+      <div className="mini-card-header">
+        <span className="mc-pos">{player.position}</span>
+        <span className="mc-num">#{player.number}</span>
+        <span className={`mc-grade ${gradeClass}`}>{player.overall_grade}</span>
         {player.receiver_letter && (
-          <span className="chip-letter">{player.receiver_letter}</span>
+          <span className="mc-letter mc-letter-off">{player.receiver_letter}</span>
         )}
         {player.defender_letter && (
-          <span className="chip-letter def-letter">{player.defender_letter}</span>
+          <span className="mc-letter mc-letter-def">{player.defender_letter}</span>
         )}
-        <span className={`chip-grade ${gradeClass}`}>{player.overall_grade}</span>
-        <span className="chip-expand">{expanded ? '▼' : '▶'}</span>
       </div>
-      {expanded && (
-        <div className="chip-card-detail">
-          {/* QB passing ranges */}
-          {player.position === 'QB' && <PassRangesDisplay player={player} />}
-          {/* QB endurance */}
-          {player.position === 'QB' && player.qb_endurance && (
-            <div className="endurance-badge">Endurance: {player.qb_endurance}</div>
+      <div className="mc-name">{player.name}</div>
+
+      {/* QB: passing ranges */}
+      {player.position === 'QB' && player.passing_quick && (
+        <div className="mc-data">
+          <table className="mc-table">
+            <thead>
+              <tr><th></th><th>COM</th><th>INC</th><th>INT</th></tr>
+            </thead>
+            <tbody>
+              {[
+                { l: 'Q', d: player.passing_quick },
+                { l: 'S', d: player.passing_short },
+                { l: 'L', d: player.passing_long },
+              ].map(r => r.d ? (
+                <tr key={r.l}>
+                  <td className="mc-row-label">{r.l}</td>
+                  <td className="pass-com">1-{r.d.com_max}</td>
+                  <td className="pass-inc">{r.d.com_max + 1}-{r.d.inc_max}</td>
+                  <td className="pass-int">{r.d.inc_max < 48 ? `${r.d.inc_max + 1}-48` : '—'}</td>
+                </tr>
+              ) : null)}
+            </tbody>
+          </table>
+          {player.pass_rush && (
+            <div className="mc-sub">
+              PR: Sk 1-{player.pass_rush.sack_max} | R {player.pass_rush.sack_max + 1}-{player.pass_rush.runs_max} | C {player.pass_rush.runs_max + 1}-{player.pass_rush.com_max}
+            </div>
           )}
-          {/* Rushing rows */}
-          {player.rushing && player.rushing.length > 0 && (
-            <ThreeColumnTable
-              rows={player.rushing}
-              headers={['N', 'SG', 'LG']}
-              label={`Rushing (End: ${player.endurance_rushing})`}
-            />
-          )}
-          {/* Pass gain rows */}
-          {player.pass_gain && player.pass_gain.length > 0 && (
-            <ThreeColumnTable
-              rows={player.pass_gain}
-              headers={['Q', 'S', 'L']}
-              label={`Pass Gain (End: ${player.endurance_pass})`}
-            />
-          )}
-          {/* Blocks */}
-          {player.blocks !== 0 && (
-            <div className="blocks-badge">Blocks: {player.blocks > 0 ? '+' : ''}{player.blocks}</div>
-          )}
-          {/* Defense ratings */}
-          {isDefender && <DefenseRatings player={player} />}
-          {/* Kicker FG chart */}
-          {player.fg_chart && Object.keys(player.fg_chart).length > 0 && (
-            <div className="card-table">
-              <div className="card-table-label">FG Chart (XP: {((player.xp_rate || 0.95) * 100).toFixed(0)}%)</div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Range</th>
-                    <th>Rate</th>
+          {player.qb_endurance && <div className="mc-sub">End: {player.qb_endurance}</div>}
+        </div>
+      )}
+
+      {/* RB/WR/TE: rushing + pass gain tables */}
+      {!isDefender && player.position !== 'QB' && player.position !== 'K' && player.position !== 'P' && (
+        <div className="mc-data">
+          {player.rushing && player.rushing.length > 0 && player.rushing.some(r => r !== null) && (
+            <table className="mc-table">
+              <thead>
+                <tr><th>#</th><th>N</th><th>SG</th><th>LG</th></tr>
+              </thead>
+              <tbody>
+                {player.rushing.map((row, i) => (
+                  <tr key={i}>
+                    <td className="mc-row-label">{i + 1}</td>
+                    <td>{row ? row[0] : '—'}</td>
+                    <td>{row ? row[1] : '—'}</td>
+                    <td>{row ? row[2] : '—'}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(player.fg_chart).map(([range, rate]) => (
-                    <tr key={range}>
-                      <td>{range}</td>
-                      <td>{((rate as number) * 100).toFixed(0)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           )}
-          {/* Punter */}
-          {player.position === 'P' && player.avg_distance > 0 && (
-            <div className="punter-info">
-              Avg: {player.avg_distance.toFixed(1)} yds | Inside 20: {((player.inside_20_rate || 0) * 100).toFixed(0)}%
-            </div>
+          {player.pass_gain && player.pass_gain.length > 0 && player.pass_gain.some(r => r !== null) && (
+            <table className="mc-table">
+              <thead>
+                <tr><th>#</th><th>Q</th><th>S</th><th>L</th></tr>
+              </thead>
+              <tbody>
+                {player.pass_gain.map((row, i) => (
+                  <tr key={i}>
+                    <td className="mc-row-label">{i + 1}</td>
+                    <td>{row ? row[0] : '—'}</td>
+                    <td>{row ? row[1] : '—'}</td>
+                    <td>{row ? row[2] : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
+          {player.blocks !== 0 && <div className="mc-sub">Blocks: {player.blocks > 0 ? '+' : ''}{player.blocks}</div>}
+        </div>
+      )}
+
+      {/* Kicker: FG chart */}
+      {player.fg_chart && Object.keys(player.fg_chart).length > 0 && (
+        <div className="mc-data">
+          <div className="mc-sub">XP: {((player.xp_rate || 0.95) * 100).toFixed(0)}%</div>
+          <table className="mc-table">
+            <thead><tr><th>Range</th><th>Rate</th></tr></thead>
+            <tbody>
+              {Object.entries(player.fg_chart).map(([range, rate]) => (
+                <tr key={range}>
+                  <td>{range}</td>
+                  <td>{((rate as number) * 100).toFixed(0)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Punter */}
+      {player.position === 'P' && player.avg_distance > 0 && (
+        <div className="mc-data">
+          <div className="mc-sub">Avg: {player.avg_distance.toFixed(1)} | I20: {((player.inside_20_rate || 0) * 100).toFixed(0)}%</div>
+        </div>
+      )}
+
+      {/* Defender: ratings */}
+      {isDefender && (
+        <div className="mc-data mc-def-ratings">
+          <div className="mc-rating">
+            <span className="mc-rl">Rush</span>
+            <div className="mc-bar"><div className="mc-fill mc-fill-rush" style={{ width: `${player.pass_rush_rating}%` }} /></div>
+            <span className="mc-rv">{player.pass_rush_rating}</span>
+          </div>
+          <div className="mc-rating">
+            <span className="mc-rl">Cov</span>
+            <div className="mc-bar"><div className="mc-fill mc-fill-cov" style={{ width: `${player.coverage_rating}%` }} /></div>
+            <span className="mc-rv">{player.coverage_rating}</span>
+          </div>
+          <div className="mc-rating">
+            <span className="mc-rl">Stop</span>
+            <div className="mc-bar"><div className="mc-fill mc-fill-stop" style={{ width: `${player.run_stop_rating}%` }} /></div>
+            <span className="mc-rv">{player.run_stop_rating}</span>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-export function LetterBoards({ personnel, possession }: LetterBoardsProps) {
-  const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
+/* ─── Offensive Line placeholder slot ─────────────────────────── */
+
+function OLSlot({ label }: { label: string }) {
+  return (
+    <div className="mini-card mini-card-ol">
+      <div className="mc-pos-only">{label}</div>
+    </div>
+  );
+}
+
+/* ─── LetterBoards main component ─────────────────────────────── */
+
+export function LetterBoards({ personnel }: LetterBoardsProps) {
+  const [collapsed, setCollapsed] = useState<{ off: boolean; def: boolean }>({ off: false, def: false });
 
   if (!personnel) {
     return (
@@ -237,84 +174,116 @@ export function LetterBoards({ personnel, possession }: LetterBoardsProps) {
     );
   }
 
-  const togglePlayer = (key: string) => {
-    setExpandedPlayer(expandedPlayer === key ? null : key);
-  };
-
   return (
     <div className="letter-boards">
-      {/* Offense Board */}
-      <div className="letter-board offense-board">
-        <div className="board-header-bar">
+      {/* ── OFFENSE BOARD ── */}
+      <div className="lineup-board offense-board-5e">
+        <div className="board-header-bar" onClick={() => setCollapsed(c => ({ ...c, off: !c.off }))}>
           <span className="board-icon">⚔️</span>
           <h4>OFFENSE — {personnel.offense_team}</h4>
           <span className="ball-badge">🏈</span>
+          <span className="collapse-toggle">{collapsed.off ? '▶' : '▼'}</span>
         </div>
-        <div className="board-grid">
-          {/* QB */}
-          {personnel.offense_starters.QB && (
-            <PlayerChip
-              player={personnel.offense_starters.QB}
-              highlight
-              expanded={expandedPlayer === 'off-QB'}
-              onToggle={() => togglePlayer('off-QB')}
-            />
-          )}
-          {/* RB */}
-          {personnel.offense_starters.RB && (
-            <PlayerChip
-              player={personnel.offense_starters.RB}
-              expanded={expandedPlayer === 'off-RB'}
-              onToggle={() => togglePlayer('off-RB')}
-            />
-          )}
-          {/* Receivers (WR + TE) with letter designations */}
-          {personnel.offense_receivers.map((r, i) => (
-            <PlayerChip
-              key={i}
-              player={r}
-              expanded={expandedPlayer === `off-rec-${i}`}
-              onToggle={() => togglePlayer(`off-rec-${i}`)}
-            />
-          ))}
-          {/* Kicker */}
-          {personnel.offense_starters.K && (
-            <PlayerChip
-              player={personnel.offense_starters.K}
-              expanded={expandedPlayer === 'off-K'}
-              onToggle={() => togglePlayer('off-K')}
-            />
-          )}
-          {/* Punter */}
-          {personnel.offense_starters.P && (
-            <PlayerChip
-              player={personnel.offense_starters.P}
-              expanded={expandedPlayer === 'off-P'}
-              onToggle={() => togglePlayer('off-P')}
-            />
-          )}
-        </div>
+
+        {!collapsed.off && (
+          <>
+            {/* Row 1: Offensive Line (position labels only) */}
+            <div className="board-row board-row-label">
+              <span className="row-label-text">LINE</span>
+            </div>
+            <div className="board-row board-row-ol">
+              <OLSlot label="LT" />
+              <OLSlot label="LG" />
+              <OLSlot label="C" />
+              <OLSlot label="RG" />
+              <OLSlot label="RT" />
+            </div>
+
+            {/* Row 2: Backfield + Receivers */}
+            <div className="board-row board-row-label">
+              <span className="row-label-text">BACKFIELD</span>
+            </div>
+            <div className="board-row board-row-backfield">
+              {personnel.offense_starters.QB && (
+                <MiniCard player={personnel.offense_starters.QB} />
+              )}
+              {personnel.offense_starters.RB && (
+                <MiniCard player={personnel.offense_starters.RB} />
+              )}
+              {personnel.offense_receivers.map((r, i) => (
+                <MiniCard key={`rec-${i}`} player={r} />
+              ))}
+            </div>
+
+            {/* Special Teams row */}
+            <div className="board-row board-row-label">
+              <span className="row-label-text">SPECIAL TEAMS</span>
+            </div>
+            <div className="board-row board-row-st">
+              {personnel.offense_starters.K && (
+                <MiniCard player={personnel.offense_starters.K} />
+              )}
+              {personnel.offense_starters.P && (
+                <MiniCard player={personnel.offense_starters.P} />
+              )}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Defense Board */}
-      <div className="letter-board defense-board">
-        <div className="board-header-bar">
+      {/* ── DEFENSE BOARD ── */}
+      <div className="lineup-board defense-board-5e">
+        <div className="board-header-bar" onClick={() => setCollapsed(c => ({ ...c, def: !c.def }))}>
           <span className="board-icon">🛡️</span>
           <h4>DEFENSE — {personnel.defense_team}</h4>
+          <span className="collapse-toggle">{collapsed.def ? '▶' : '▼'}</span>
         </div>
-        <div className="board-grid">
-          {personnel.defense_players.length > 0
-            ? personnel.defense_players.map((p, i) => (
-                <PlayerChip
-                  key={i}
-                  player={p}
-                  expanded={expandedPlayer === `def-${i}`}
-                  onToggle={() => togglePlayer(`def-${i}`)}
-                />
-              ))
-            : <span className="board-empty">No defensive personnel data</span>
-          }
-        </div>
+
+        {!collapsed.def && (
+          <>
+            {/* Row 1: Defensive Line (a-f) */}
+            <div className="board-row board-row-label">
+              <span className="row-label-text">DEFENSIVE LINE</span>
+              <span className="row-letters">a–f</span>
+            </div>
+            <div className="board-row board-row-dl">
+              {personnel.defense_line.map((p, i) => (
+                <MiniCard key={`dl-${i}`} player={p} isDefender />
+              ))}
+              {personnel.defense_line.length === 0 && (
+                <span className="board-empty">No DL data</span>
+              )}
+            </div>
+
+            {/* Row 2: Linebackers (g-k) */}
+            <div className="board-row board-row-label">
+              <span className="row-label-text">LINEBACKERS</span>
+              <span className="row-letters">g–k</span>
+            </div>
+            <div className="board-row board-row-lb">
+              {personnel.linebackers.map((p, i) => (
+                <MiniCard key={`lb-${i}`} player={p} isDefender />
+              ))}
+              {personnel.linebackers.length === 0 && (
+                <span className="board-empty">No LB data</span>
+              )}
+            </div>
+
+            {/* Row 3: Defensive Backs (l-p) */}
+            <div className="board-row board-row-label">
+              <span className="row-label-text">DEFENSIVE BACKS</span>
+              <span className="row-letters">l–p</span>
+            </div>
+            <div className="board-row board-row-db">
+              {personnel.defensive_backs.map((p, i) => (
+                <MiniCard key={`db-${i}`} player={p} isDefender />
+              ))}
+              {personnel.defensive_backs.length === 0 && (
+                <span className="board-empty">No DB data</span>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
