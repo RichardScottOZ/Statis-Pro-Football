@@ -61,6 +61,80 @@ class PlayResult:
     injury_duration: Optional[int] = None  # Injury duration in plays
 
 
+class BigPlayDefense:
+    """Big Play Defense card per 5E rules (Rule 14).
+
+    Eligible teams (9+ wins) may use this card once per defensive series.
+    """
+
+    def __init__(self):
+        self._used_this_series: bool = False
+
+    @staticmethod
+    def is_eligible(team_wins: int) -> bool:
+        """Return True if the team qualifies for big play defense (9+ wins)."""
+        return team_wins >= 9
+
+    @staticmethod
+    def get_rating(team_wins: int, is_home: bool) -> int:
+        """Return the big play defense rating based on wins and home/road.
+
+        Higher wins yield a higher rating; home teams get a small bonus.
+        """
+        base = max(0, team_wins - 8)  # 1 per win above 8
+        return base + (1 if is_home else 0)
+
+    @staticmethod
+    def resolve_vs_rush(run_number: int) -> Optional[int]:
+        """Resolve big play defense vs a rush.
+
+        Returns yards (negative = loss), or None if the card fails.
+        RN 1=-4y, 2=-3y, 3=-2y, 4=-1y, 5-7=no gain, 8-12=card fails.
+        """
+        rn = max(1, min(12, run_number))
+        if rn == 1:
+            return -4
+        if rn == 2:
+            return -3
+        if rn == 3:
+            return -2
+        if rn == 4:
+            return -1
+        if 5 <= rn <= 7:
+            return 0
+        return None  # 8-12: card fails
+
+    @staticmethod
+    def resolve_vs_pass(run_number: int) -> Optional[Dict[str, Any]]:
+        """Resolve big play defense vs a pass.
+
+        Returns dict with result info, or None if the card fails.
+        RN 1-3=sack -7y, 4-7=incomplete, 8-12=card fails.
+        """
+        rn = max(1, min(12, run_number))
+        if 1 <= rn <= 3:
+            return {"result": "SACK", "yards": -7}
+        if 4 <= rn <= 7:
+            return {"result": "INCOMPLETE", "yards": 0}
+        return None  # 8-12: card fails
+
+    def use(self) -> bool:
+        """Attempt to use the big play card. Returns False if already used this series."""
+        if self._used_this_series:
+            return False
+        self._used_this_series = True
+        return True
+
+    def reset_series(self) -> None:
+        """Reset for a new defensive series."""
+        self._used_this_series = False
+
+    @property
+    def used_this_series(self) -> bool:
+        """Whether the big play card has been used this series."""
+        return self._used_this_series
+
+
 class PlayResolver:
     """Resolves plays by consulting player cards with FAC distributions."""
 
@@ -72,6 +146,9 @@ class PlayResolver:
         self._injury_tracker: Dict[str, int] = {}
         # Track end-around usage: {player_name: bool}
         self._end_around_used: Dict[str, bool] = {}
+        # Track fake FG / fake punt usage (once per game)
+        self._fake_fg_used: bool = False
+        self._fake_punt_used: bool = False
 
     # ── Endurance tracking ───────────────────────────────────────────
 
@@ -426,6 +503,127 @@ class PlayResolver:
             if distance_to_goal <= penalty_yards:
                 return max(1, distance_to_goal // 2)
         return penalty_yards
+
+    # ── Rule 1: Run Number Modifiers ─────────────────────────────────
+
+    @staticmethod
+    def get_run_number_modifier(defense_formation: str,
+                                is_key_on_bc: bool = False,
+                                is_no_key: bool = False) -> int:
+        """Return run-number modifier based on defensive formation (Rule 1).
+
+        Run Defense / Key on Ball Carrier: +4
+        Run Defense / No Key:              +2
+        Run Defense / Wrong Key:            0
+        Pass/Prevent Defense:               0
+        Blitz Defense:                      0
+
+        Callers must explicitly set is_key_on_bc or is_no_key to activate
+        the run-defense keying modifiers.  Without either flag the default
+        is 'wrong key' (0).
+        """
+        form = defense_formation.lower() if defense_formation else ""
+        pass_forms = ("pass", "4_3_cover2", "nickel_zone", "nickel_cover2",
+                      "prevent", "3_4_zone")
+        if "blitz" in form or form == "blz":
+            return 0
+        if form in pass_forms or "prevent" in form:
+            return 0
+        # Run defense formations (4_3, 3_4, goal_line, etc.)
+        if is_key_on_bc:
+            return 4
+        if is_no_key:
+            return 2
+        # Default: wrong key → 0
+        return 0
+
+    # ── Rule 2: Pass Rush Detailed Calculation ───────────────────────
+
+    @staticmethod
+    def calculate_pass_rush_modifier(defense_pr_sum: int,
+                                     offense_pb_sum: int) -> int:
+        """Return pass rush modifier: (defense PR sum - offense PB sum) * 2.
+
+        Positive = defense wins, negative = offense wins.
+        Applied to QB's sack range.
+        """
+        return (defense_pr_sum - offense_pb_sum) * 2
+
+    # ── Rule 3: Blitz Pass Rush Value ────────────────────────────────
+
+    @staticmethod
+    def get_blitz_pass_rush_value() -> int:
+        """Blitzing players have a pass rush value of 2 regardless of printed value."""
+        return 2
+
+    # ── Rule 9: Empty Box Completion Modifier ────────────────────────
+
+    @staticmethod
+    def get_empty_box_completion_modifier(defender_assigned: bool) -> int:
+        """Return +5 to completion range when the guarding defensive box is empty."""
+        return 0 if defender_assigned else 5
+
+    # ── Rule 12: Double Coverage ─────────────────────────────────────
+
+    @staticmethod
+    def resolve_double_coverage(receiver: PlayerCard,
+                                defenders: List[PlayerCard]) -> int:
+        """Return completion range modifier for double coverage (Rule 12).
+
+        Only usable with Pass/Prevent defense.
+        Requires 4 in Row 2+3, or 3 in Row 2 + 5 in Row 3.
+        Returns -7 completion range modifier, or 0 if not applicable.
+        """
+        if len(defenders) < 2:
+            return 0
+        # Count defenders by assignment row (approximate via list position)
+        row2_count = 0
+        row3_count = 0
+        for i, d in enumerate(defenders):
+            if i == 0:
+                continue  # Row 1 is the primary
+            if i <= 3:
+                row2_count += 1
+            else:
+                row3_count += 1
+
+        if (row2_count + row3_count >= 4) or (row2_count >= 3 and row3_count >= 5):
+            return -7
+        return 0
+
+    # ── Rule 13: Triple Coverage ─────────────────────────────────────
+
+    @staticmethod
+    def resolve_triple_coverage(receiver: PlayerCard,
+                                defenders: List[PlayerCard]) -> int:
+        """Return completion range modifier for triple coverage (Rule 13).
+
+        Only usable with Pass/Prevent defense.
+        Requires 2 in Row 2 + 6 in Row 3.
+        Returns -15 completion range modifier, or 0 if not applicable.
+        """
+        if len(defenders) < 3:
+            return 0
+        row2_count = 0
+        row3_count = 0
+        for i, d in enumerate(defenders):
+            if i == 0:
+                continue
+            if i <= 3:
+                row2_count += 1
+            else:
+                row3_count += 1
+
+        if row2_count >= 2 and row3_count >= 6:
+            return -15
+        return 0
+
+    # ── Rule 23: FG Distance Calculation ─────────────────────────────
+
+    @staticmethod
+    def calculate_fg_distance(yard_line: int) -> int:
+        """Calculate field goal distance: (100 - yard_line) + 17."""
+        return (100 - yard_line) + 17
 
     # ── Z-card helper ────────────────────────────────────────────────
 
@@ -861,8 +1059,12 @@ class PlayResolver:
     def _resolve_receiver_target(self, fac_card: FACCard,
                                  pass_type: str,
                                  default_receiver: PlayerCard,
-                                 receivers: List[PlayerCard]) -> PlayerCard:
-        """Determine which receiver is targeted based on FAC card field."""
+                                 receivers: List[PlayerCard]) -> Optional[PlayerCard]:
+        """Determine which receiver is targeted based on FAC card field.
+
+        Rule 8: If the targeted position is unoccupied (no receiver matches),
+        returns None so the caller treats it as a thrown-away pass (incomplete).
+        """
         target = fac_card.get_receiver_target(pass_type)
         if target in ("Orig", "Z"):
             return default_receiver
@@ -870,9 +1072,12 @@ class PlayResolver:
             return default_receiver  # caller handles P.Rush as sack
         # Target is a position code: FL, LE, RE, BK1, BK2, etc.
         target_map = {"FL": 0, "LE": 1, "RE": 2, "BK1": 3, "BK2": 4}
-        idx = target_map.get(target, 0)
-        if idx < len(receivers):
+        idx = target_map.get(target)
+        if idx is not None and idx < len(receivers):
             return receivers[idx]
+        # Rule 8: Position unoccupied → return None (thrown away)
+        if idx is not None and idx >= len(receivers):
+            return None
         return default_receiver
 
     def resolve_pass_5e(self, fac_card: FACCard, deck: FACDeck,
@@ -952,7 +1157,26 @@ class PlayResolver:
             # Pass rush result → check QB's pass_rush ranges
             if qb.pass_rush:
                 pn = fac_card.pass_num_int or random.randint(1, 48)
-                pr_result = qb.pass_rush.resolve(pn)
+
+                # Rule 2: Apply pass rush modifier to sack range
+                pr_modifier = self.calculate_pass_rush_modifier(
+                    defense_pass_rush, getattr(qb, 'pass_block_rating', 0)
+                )
+                adjusted_pn = pn
+                if pr_modifier != 0:
+                    # Positive modifier extends sack range (worse for QB)
+                    adjusted_pn = max(1, min(48, pn - pr_modifier))
+
+                # Rule 3: Blitz pass rush override
+                if is_blitz_tendency:
+                    # Blitzing players use value of 2 regardless of printed
+                    blitz_pr = self.get_blitz_pass_rush_value()
+                    blitz_mod = self.calculate_pass_rush_modifier(
+                        blitz_pr * 2, getattr(qb, 'pass_block_rating', 0)
+                    )
+                    adjusted_pn = max(1, min(48, pn - blitz_mod))
+
+                pr_result = qb.pass_rush.resolve(adjusted_pn)
                 if pr_result == "SACK":
                     loss = -(pn // 3 + 1)  # Sack yards from PN
                     loss = max(loss, -8)
@@ -964,11 +1188,27 @@ class PlayResolver:
                         pass_number_used=pn,
                     )
                 elif pr_result == "RUNS":
-                    # QB scramble — use rushing column
+                    # Rule 5: QB scramble N→SG→LG chain
                     run_num = fac_card.run_num_int or random.randint(1, 12)
                     if qb.rushing:
                         row = qb.get_rushing_row(run_num)
-                        yards = row.v1 if isinstance(row.v1, int) else random.randint(1, 8)
+                        yards = row.v1
+                        # N→SG chain: if N gives "Sg", look up SG column
+                        if isinstance(yards, str) and yards == "Sg":
+                            yards = row.v2
+                            # SG→LG chain: if SG gives further special, use LG
+                            if isinstance(yards, str):
+                                yards = row.v3
+                                if isinstance(yards, str):
+                                    try:
+                                        yards = int(yards)
+                                    except (ValueError, TypeError):
+                                        yards = random.randint(15, 40)
+                        elif not isinstance(yards, int):
+                            try:
+                                yards = int(yards)
+                            except (ValueError, TypeError):
+                                yards = random.randint(1, 8)
                     else:
                         yards = random.randint(-2, 5)
                     is_td = random.random() < 0.03
@@ -1000,12 +1240,24 @@ class PlayResolver:
 
         # ── Step 2: Screen pass — use FAC SC field directly ──────────
         if pass_type == "SCREEN":
-            return self._resolve_screen_5e(fac_card, qb, receiver, z_event)
+            return self._resolve_screen_5e(
+                fac_card, qb, receiver, z_event,
+                receivers=receivers,
+                defense_formation=defense_formation,
+            )
 
         # ── Step 3: Determine actual receiver target ─────────────────
         actual_receiver = self._resolve_receiver_target(
             fac_card, pass_type, receiver, receivers,
         )
+
+        # Rule 8: If targeted position is unoccupied, throw the ball away
+        if actual_receiver is None:
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"{qb.player_name} throws the ball away - no receiver at targeted position",
+                passer=qb.player_name, z_card_event=z_event,
+            )
 
         # ── Step 4: PN → QB card passing ranges → COM/INC/INT ────────
         pn = fac_card.pass_num_int
@@ -1141,6 +1393,17 @@ class PlayResolver:
             else:
                 yards = row.v2  # Short pass
 
+            # Rule 11: Dropped passes — blank/0/None = dropped (incomplete)
+            if yards is None or yards == 0 or yards == "":
+                return PlayResult(
+                    play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                    description=f"{qb.player_name} pass dropped by {target_receiver.player_name}",
+                    passer=qb.player_name, receiver=target_receiver.player_name,
+                    z_card_event=z_event,
+                    pass_number_used=pn,
+                    run_number_used=run_num,
+                )
+
             # Handle string values like "Lg" (long gain / big play)
             if isinstance(yards, str):
                 if yards == "Lg":
@@ -1186,6 +1449,12 @@ class PlayResolver:
         if cov_modifier > 0 and isinstance(yards, int):
             yards = max(0, int(yards * (1 - cov_modifier)))
 
+        # Rule 10: If pass yards would go past end zone, it's a TD
+        # (yard_line not passed to this method, so this is handled by callers
+        #  but we mark any very-large-yard play as a likely TD)
+        if isinstance(yards, int) and yards >= 99:
+            is_td = True
+
         if is_td:
             desc = f"{qb.player_name} completes to {target_receiver.player_name} for a TOUCHDOWN!"
         else:
@@ -1204,15 +1473,33 @@ class PlayResolver:
 
     def _resolve_screen_5e(self, fac_card: FACCard, qb: PlayerCard,
                            receiver: PlayerCard,
-                           z_event: Optional[Dict[str, Any]]) -> PlayResult:
-        """Resolve a screen pass using the FAC card's SC field."""
+                           z_event: Optional[Dict[str, Any]],
+                           receivers: Optional[List[PlayerCard]] = None,
+                           defense_formation: str = "4_3") -> PlayResult:
+        """Resolve a screen pass using the FAC card's SC field.
+
+        Rule 4: Screen passes must go to a back (RB). If the receiver is a
+        TE/WR, automatically redirect to the first available RB. When the
+        screen is complete, use the RB's rushing N column for yards.
+        Defense run number modifiers apply to screen plays.
+        """
+        # Rule 4: Redirect to first available RB if receiver is not a back
+        actual_receiver = receiver
+        if receiver.position not in ("RB", "QB"):
+            # Find first available RB in receivers list
+            if receivers:
+                for r in receivers:
+                    if r.position == "RB":
+                        actual_receiver = r
+                        break
+
         sc_result = fac_card.screen_result
 
         if sc_result == "Inc":
             return PlayResult(
                 play_type="PASS", yards_gained=0, result="INCOMPLETE",
-                description=f"{qb.player_name} screen pass to {receiver.player_name} - incomplete",
-                passer=qb.player_name, receiver=receiver.player_name,
+                description=f"{qb.player_name} screen pass to {actual_receiver.player_name} - incomplete",
+                passer=qb.player_name, receiver=actual_receiver.player_name,
                 z_card_event=z_event,
             )
 
@@ -1222,21 +1509,37 @@ class PlayResolver:
                 play_type="PASS", yards_gained=0,
                 result="INT", turnover=True, turnover_type="INT",
                 description=f"{qb.player_name} screen pass intercepted!",
-                passer=qb.player_name, receiver=receiver.player_name,
+                passer=qb.player_name, receiver=actual_receiver.player_name,
                 z_card_event=z_event,
             )
 
-        # Screen complete — base yards
-        base_yards = random.randint(3, 10)
-        multiplier = 1.0
+        # Screen complete — Rule 4: use RB's rushing N column for yards
+        run_num = fac_card.run_num_int or random.randint(1, 12)
+        # Apply defense run number modifiers for screen
+        rn_modifier = self.get_run_number_modifier(defense_formation)
+        run_num = max(1, min(12, run_num + rn_modifier))
 
+        if actual_receiver.has_rushing():
+            row = actual_receiver.get_rushing_row(run_num)
+            base_yards = row.v1
+            if isinstance(base_yards, str):
+                if base_yards == "Sg":
+                    base_yards = row.v2 if isinstance(row.v2, int) else random.randint(8, 15)
+                else:
+                    try:
+                        base_yards = int(base_yards)
+                    except (ValueError, TypeError):
+                        base_yards = random.randint(3, 10)
+        else:
+            base_yards = random.randint(3, 10)
+
+        multiplier = 1.0
         if sc_result.startswith("Com x"):
             try:
                 mult_str = sc_result.split("x")[-1].strip()
                 if "½" in mult_str:
                     multiplier = 0.5
                 elif "/" in mult_str:
-                    # Handle fractions like "1/2"
                     num, den = mult_str.split("/")
                     multiplier = float(num) / float(den)
                 else:
@@ -1244,11 +1547,10 @@ class PlayResolver:
             except (ValueError, ZeroDivisionError):
                 multiplier = 1.0
         elif sc_result == "Dropped Int":
-            # Dropped interception → treat as incomplete
             return PlayResult(
                 play_type="PASS", yards_gained=0, result="INCOMPLETE",
                 description=f"{qb.player_name} screen pass nearly intercepted - dropped!",
-                passer=qb.player_name, receiver=receiver.player_name,
+                passer=qb.player_name, receiver=actual_receiver.player_name,
                 z_card_event=z_event,
             )
 
@@ -1256,17 +1558,18 @@ class PlayResolver:
         is_td = random.random() < 0.03
 
         if is_td:
-            desc = f"{qb.player_name} screen pass to {receiver.player_name} for a TOUCHDOWN!"
+            desc = f"{qb.player_name} screen pass to {actual_receiver.player_name} for a TOUCHDOWN!"
         else:
-            desc = f"{qb.player_name} screen pass to {receiver.player_name} for {yards} yards"
+            desc = f"{qb.player_name} screen pass to {actual_receiver.player_name} for {yards} yards"
 
         return PlayResult(
             play_type="PASS", yards_gained=yards,
             result="TD" if is_td else "COMPLETE",
             is_touchdown=is_td,
             description=desc,
-            passer=qb.player_name, receiver=receiver.player_name,
+            passer=qb.player_name, receiver=actual_receiver.player_name,
             z_card_event=z_event,
+            run_number_used=run_num,
         )
 
     def resolve_run_5e(self, fac_card: FACCard, deck: FACDeck,
@@ -1304,6 +1607,12 @@ class PlayResolver:
         # ── Determine run number and OOB ─────────────────────────────
         run_num = fac_card.run_num_int
         is_oob = fac_card.is_out_of_bounds
+
+        # Rule 1: Apply run number modifier based on defense formation
+        rn_modifier = self.get_run_number_modifier(defense_formation)
+        if run_num is not None:
+            run_num = max(1, min(12, run_num + rn_modifier))
+
         rn_str = str(run_num) if run_num is not None else "1"
         used_run_num = run_num if run_num is not None else 1
 
@@ -1509,4 +1818,442 @@ class PlayResolver:
             rusher=rusher.player_name,
             z_card_event=z_event,
             run_number_used=used_run_num,
+        )
+
+    # ══════════════════════════════════════════════════════════════════
+    #  ADDITIONAL 5E RULES — NEW METHODS
+    # ══════════════════════════════════════════════════════════════════
+
+    # ── Rule 6: End-Around Resolution ────────────────────────────────
+
+    def resolve_end_around(self, fac_card: FACCard, deck: FACDeck,
+                           receiver: PlayerCard,
+                           defense_formation: str = "4_3",
+                           defense_run_stop: int = 50) -> PlayResult:
+        """Resolve an end-around play (Rule 6).
+
+        - Check ER info on FAC card: 'OK' = resolve as run using receiver's
+          Rush column; negative number = automatic loss of that many yards.
+        - Only allowed if receiver has rushing data.
+        - Only ONCE per game per player.
+        """
+        # Check if already used this game
+        if self._end_around_used.get(receiver.player_name, False):
+            return PlayResult(
+                play_type="RUN", yards_gained=-5, result="GAIN",
+                description=f"End-around to {receiver.player_name} ILLEGAL - already used! -5 yards",
+                rusher=receiver.player_name,
+            )
+
+        # Check if receiver has rushing data
+        if not receiver.has_rushing():
+            return PlayResult(
+                play_type="RUN", yards_gained=-5, result="GAIN",
+                description=f"End-around to {receiver.player_name} fails - no rushing ability! -5 yards",
+                rusher=receiver.player_name,
+            )
+
+        # Mark as used
+        self._end_around_used[receiver.player_name] = True
+
+        # Check ER field on FAC card
+        er = fac_card.end_run.strip()
+        if er != "OK":
+            # Negative number = automatic loss
+            try:
+                loss = int(er)
+                if loss < 0:
+                    return PlayResult(
+                        play_type="RUN", yards_gained=loss, result="GAIN",
+                        description=f"End-around to {receiver.player_name} loses {abs(loss)} yards",
+                        rusher=receiver.player_name,
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        # ER is OK — resolve as a run using receiver's Rush column
+        return self.resolve_run_5e(
+            fac_card, deck, receiver, "SR",
+            defense_run_stop=defense_run_stop,
+            defense_formation=defense_formation,
+        )
+
+    # ── Rule 7: Blocking Backs ───────────────────────────────────────
+
+    @staticmethod
+    def resolve_blocking_back(fac_matchup: str,
+                              backs: List[PlayerCard]) -> int:
+        """Resolve blocking back yardage modifier (Rule 7).
+
+        When FAC directs to 'BK', the non-carrying back's BV modifies yardage.
+        If 2 extra backs, both BVs are summed (coupled).
+
+        Returns the total blocking value modifier.
+        """
+        if not backs:
+            return 0
+        total_bv = 0
+        for back in backs:
+            total_bv += getattr(back, 'blocks', 0)
+        return total_bv
+
+    # ── Rule 10: Passes Past End Zone = TD ───────────────────────────
+
+    @staticmethod
+    def check_pass_td_at_goal(yard_line: int, pass_yards: int) -> bool:
+        """Return True if pass yards reach or exceed the end zone (Rule 10).
+
+        yard_line is distance from own end zone (0-100).
+        """
+        return (yard_line + pass_yards) >= 100
+
+    # ── Rule 15: Coffin Corner Punts ─────────────────────────────────
+
+    def resolve_coffin_corner_punt(self, punter: PlayerCard,
+                                   deck: FACDeck,
+                                   deduction: int) -> PlayResult:
+        """Resolve a coffin corner punt (Rule 15).
+
+        Parameters
+        ----------
+        punter : PlayerCard
+            The punter's card.
+        deck : FACDeck
+            The FAC deck.
+        deduction : int
+            Declared deduction from normal punt distance (10-25 yards).
+        """
+        deduction = max(10, min(25, deduction))
+        punt_distance = max(10, int(punter.avg_distance) - deduction)
+
+        # Draw FAC for run number
+        fac_card = deck.draw()
+        rn = fac_card.run_num_int or random.randint(1, 12)
+
+        if rn % 2 == 1:
+            # Odd RN: out of bounds at calculated spot, no return
+            return PlayResult(
+                play_type="PUNT", yards_gained=punt_distance,
+                result="PUNT", out_of_bounds=True,
+                description=(
+                    f"{punter.player_name} coffin corner punt {punt_distance} yards, "
+                    f"out of bounds (RN {rn})"
+                ),
+                run_number_used=rn,
+            )
+        else:
+            # Even RN: normal return from calculated spot
+            return_yards = Charts.roll_punt_return()
+            net = punt_distance - return_yards
+            return PlayResult(
+                play_type="PUNT", yards_gained=net,
+                result="PUNT",
+                description=(
+                    f"{punter.player_name} coffin corner punt {punt_distance} yards, "
+                    f"returned {return_yards} yards (RN {rn})"
+                ),
+                run_number_used=rn,
+            )
+
+    # ── Rule 16: All-Out Punt Rush ───────────────────────────────────
+
+    def resolve_all_out_punt_rush(self, punter: PlayerCard,
+                                  deck: FACDeck) -> PlayResult:
+        """Resolve an all-out punt rush (Rule 16).
+
+        - Ignore RN 12 results.
+        - RN 1-4:  blocked punt (-5 yards behind scrimmage).
+        - RN 5-9:  hurried punt (use RN 11 yardage from punter card).
+        - RN 10-12: roughing the punter (15 yards + first down penalty).
+        - Max return 3 yards.
+        """
+        fac_card = deck.draw()
+        rn = fac_card.run_num_int or random.randint(1, 12)
+
+        # Ignore RN 12 — redraw
+        while rn == 12:
+            fac_card = deck.draw()
+            rn = fac_card.run_num_int or random.randint(1, 11)
+
+        if 1 <= rn <= 4:
+            # Blocked punt
+            return PlayResult(
+                play_type="PUNT", yards_gained=-5,
+                result="BLOCKED_PUNT",
+                description=f"{punter.player_name}'s punt is BLOCKED! -5 yards (RN {rn})",
+                run_number_used=rn,
+            )
+        elif 5 <= rn <= 9:
+            # Hurried punt — use RN 11 yardage (shorter kick)
+            if punter.rushing and len(punter.rushing) >= 11:
+                row = punter.get_rushing_row(11)
+                punt_yards = row.v1 if isinstance(row.v1, int) else int(punter.avg_distance * 0.7)
+            else:
+                punt_yards = int(punter.avg_distance * 0.7)
+            # Max return 3 yards
+            return_yards = min(3, Charts.roll_punt_return())
+            net = punt_yards - return_yards
+            return PlayResult(
+                play_type="PUNT", yards_gained=net,
+                result="PUNT",
+                description=(
+                    f"{punter.player_name} hurried punt for {punt_yards} yards, "
+                    f"returned {return_yards} yards (RN {rn})"
+                ),
+                run_number_used=rn,
+            )
+        else:
+            # RN 10-11: Roughing the punter
+            return PlayResult(
+                play_type="PUNT", yards_gained=15,
+                result="PENALTY",
+                is_first_down=True,
+                penalty={"type": "ROUGHING_PUNTER", "yards": 15,
+                         "auto_first": True, "loss_of_down": False},
+                description=f"Roughing the punter! 15 yards and automatic first down (RN {rn})",
+                run_number_used=rn,
+            )
+
+    # ── Rule 17: Punt Number 12 Rules ────────────────────────────────
+
+    def resolve_punt_rn12(self, punter: PlayerCard,
+                          deck: FACDeck) -> PlayResult:
+        """Handle punt when RN is 12 (Rule 17).
+
+        When RN is 12, draw a new 1-12 number:
+          1-4: longest kick (out of bounds, no return)
+          5-8: blocked punt (-5 yards)
+          9-12: 5-yard movement penalty against kicking team
+        """
+        fac_card = deck.draw()
+        rn2 = fac_card.run_num_int or random.randint(1, 12)
+
+        if 1 <= rn2 <= 4:
+            # Longest kick, OOB
+            long_dist = int(punter.avg_distance + 10)
+            return PlayResult(
+                play_type="PUNT", yards_gained=long_dist,
+                result="PUNT", out_of_bounds=True,
+                description=f"{punter.player_name} booms a {long_dist}-yard punt out of bounds (RN12→{rn2})",
+                run_number_used=rn2,
+            )
+        elif 5 <= rn2 <= 8:
+            # Blocked punt
+            return PlayResult(
+                play_type="PUNT", yards_gained=-5,
+                result="BLOCKED_PUNT",
+                description=f"{punter.player_name}'s punt is BLOCKED! (RN12→{rn2})",
+                run_number_used=rn2,
+            )
+        else:
+            # 5-yard movement penalty
+            return PlayResult(
+                play_type="PUNT", yards_gained=0,
+                result="PENALTY",
+                penalty={"type": "DELAY_OF_GAME", "yards": 5,
+                         "auto_first": False, "loss_of_down": False},
+                description=f"5-yard movement penalty against kicking team (RN12→{rn2})",
+                run_number_used=rn2,
+            )
+
+    # ── Rule 18: Punt Penalties ──────────────────────────────────────
+
+    @staticmethod
+    def check_punt_penalty(run_number: int) -> Optional[Dict[str, Any]]:
+        """Check for automatic punt penalty (Rule 18).
+
+        Even RN = 5-yard penalty vs kicking team.
+        Odd RN = 5-yard penalty vs return team.
+        These are automatic and cannot be declined.
+        """
+        if run_number % 2 == 0:
+            return {"team": "kicking", "yards": 5, "type": "PUNT_PENALTY",
+                    "description": "5-yard penalty against kicking team"}
+        return {"team": "returning", "yards": 5, "type": "PUNT_PENALTY",
+                "description": "5-yard penalty against return team"}
+
+    # ── Rule 19: Punt Inside 6 = Touchback ───────────────────────────
+
+    @staticmethod
+    def check_punt_touchback(landing_yard_line: int,
+                             is_coffin_corner: bool = False) -> bool:
+        """Return True if a non-coffin-corner punt landing inside the 6 is a touchback (Rule 19).
+
+        landing_yard_line is the opponent's yard line where the punt lands
+        (1 = very close to their end zone, 100 = our end zone).
+        """
+        if is_coffin_corner:
+            return False
+        return landing_yard_line <= 5
+
+    # ── Rule 20: Fumbled Punt Returns ────────────────────────────────
+
+    @staticmethod
+    def check_fumbled_punt_return(return_result: str) -> bool:
+        """Return True if the punt return result includes a fumble (Rule 20).
+
+        When the return result contains 'f', the return is fumbled.
+        """
+        if isinstance(return_result, str) and "f" in return_result.lower():
+            return True
+        return False
+
+    # ── Rule 21: Fake Field Goal ─────────────────────────────────────
+
+    def resolve_fake_field_goal(self, deck: FACDeck,
+                                qb_or_holder: PlayerCard,
+                                minutes_remaining: float = 3.0) -> PlayResult:
+        """Resolve a fake field goal attempt (Rule 21).
+
+        - Draw FAC for RN: 1-6 = pass/run result, 7-9 = incomplete,
+          10 = INT returned for TD.
+        - Once per game restriction.
+        - Never in final 2 minutes.
+        """
+        if self._fake_fg_used:
+            return PlayResult(
+                play_type="FG", yards_gained=-10, result="GAIN",
+                description="Fake FG ILLEGAL - already used this game! -10 yards",
+            )
+        if minutes_remaining <= 2.0:
+            return PlayResult(
+                play_type="FG", yards_gained=-10, result="GAIN",
+                description="Fake FG ILLEGAL - cannot use in final 2 minutes! -10 yards",
+            )
+
+        self._fake_fg_used = True
+        fac_card = deck.draw()
+        rn = fac_card.run_num_int or random.randint(1, 12)
+
+        if 1 <= rn <= 6:
+            # Pass/run result — scramble for yards
+            yards = random.randint(2, 15)
+            is_td = random.random() < 0.08
+            return PlayResult(
+                play_type="PASS", yards_gained=yards,
+                result="TD" if is_td else "COMPLETE",
+                is_touchdown=is_td,
+                description=f"Fake field goal! {qb_or_holder.player_name} gains {yards} yards! (RN {rn})",
+                passer=qb_or_holder.player_name,
+                run_number_used=rn,
+            )
+        elif 7 <= rn <= 9:
+            return PlayResult(
+                play_type="PASS", yards_gained=0, result="INCOMPLETE",
+                description=f"Fake field goal! Pass incomplete (RN {rn})",
+                passer=qb_or_holder.player_name,
+                run_number_used=rn,
+            )
+        else:
+            # RN 10-12: interception returned for TD
+            return PlayResult(
+                play_type="PASS", yards_gained=0,
+                result="INT", turnover=True, turnover_type="INT",
+                is_touchdown=True,
+                description=f"Fake field goal! INTERCEPTED and returned for a TOUCHDOWN! (RN {rn})",
+                passer=qb_or_holder.player_name,
+                run_number_used=rn,
+            )
+
+    # ── Rule 22: Fake Punt ───────────────────────────────────────────
+
+    def resolve_fake_punt(self, deck: FACDeck,
+                          punter: PlayerCard) -> PlayResult:
+        """Resolve a fake punt attempt (Rule 22).
+
+        - Draw FAC for RN: 1-5 = pass result, 6-12 = punter run results.
+        - RN 12 = daylight run (PN × 2 yards).
+        - Once per game restriction.
+        """
+        if self._fake_punt_used:
+            return PlayResult(
+                play_type="PUNT", yards_gained=-10, result="GAIN",
+                description="Fake punt ILLEGAL - already used this game! -10 yards",
+            )
+
+        self._fake_punt_used = True
+        fac_card = deck.draw()
+        rn = fac_card.run_num_int or random.randint(1, 12)
+
+        if 1 <= rn <= 5:
+            # Pass result
+            yards = random.randint(5, 20)
+            is_td = random.random() < 0.05
+            return PlayResult(
+                play_type="PASS", yards_gained=yards,
+                result="TD" if is_td else "COMPLETE",
+                is_touchdown=is_td,
+                description=f"Fake punt! {punter.player_name} throws for {yards} yards! (RN {rn})",
+                passer=punter.player_name,
+                run_number_used=rn,
+            )
+        elif rn == 12:
+            # Daylight run: PN × 2 yards
+            pn = fac_card.pass_num_int or random.randint(1, 48)
+            yards = pn * 2
+            is_td = random.random() < 0.15
+            return PlayResult(
+                play_type="RUN", yards_gained=yards,
+                result="TD" if is_td else "GAIN",
+                is_touchdown=is_td,
+                description=f"Fake punt! {punter.player_name} daylight run for {yards} yards! (RN {rn}, PN {pn})",
+                rusher=punter.player_name,
+                run_number_used=rn,
+                pass_number_used=pn,
+            )
+        else:
+            # RN 6-11: punter run results
+            yards = random.randint(-2, 8)
+            is_td = random.random() < 0.03
+            return PlayResult(
+                play_type="RUN", yards_gained=yards,
+                result="TD" if is_td else "GAIN",
+                is_touchdown=is_td,
+                description=f"Fake punt! {punter.player_name} runs for {yards} yards (RN {rn})",
+                rusher=punter.player_name,
+                run_number_used=rn,
+            )
+
+    # ── Rule 24: FG Over 50 ─────────────────────────────────────────
+
+    def resolve_field_goal_5e(self, distance: int,
+                              kicker: PlayerCard) -> PlayResult:
+        """Resolve a field goal with 5E over-50 rules (Rule 24).
+
+        When distance > 50 yards:
+          - Subtract 2 from the Good Range per yard over 50.
+          - Maximum attempt distance is 55 yards.
+        """
+        if distance > 55:
+            return PlayResult(
+                play_type="FG", yards_gained=0,
+                result="FG_NO_GOOD",
+                description=f"{kicker.player_name} {distance}-yard FG attempt too far (max 55)",
+            )
+
+        fg_chart = kicker.fg_chart
+        if distance < 20:
+            rate = fg_chart.get("0-19", 0.99)
+        elif distance < 30:
+            rate = fg_chart.get("20-29", 0.95)
+        elif distance < 40:
+            rate = fg_chart.get("30-39", 0.88)
+        elif distance < 50:
+            rate = fg_chart.get("40-49", 0.78)
+        elif distance < 60:
+            rate = fg_chart.get("50-59", 0.62)
+        else:
+            rate = fg_chart.get("60+", 0.35)
+
+        # Rule 24: Subtract 2 from good range per yard over 50
+        if distance > 50:
+            penalty = (distance - 50) * 2
+            # Convert rate reduction: each point is roughly 1/48 of range
+            rate = max(0.0, rate - penalty / 48.0)
+
+        made = random.random() < rate
+        return PlayResult(
+            play_type="FG", yards_gained=0,
+            result="FG_GOOD" if made else "FG_NO_GOOD",
+            description=f"{kicker.player_name} {'makes' if made else 'misses'} {distance}-yard field goal",
         )
