@@ -10,6 +10,11 @@ import { SubstitutionPanel } from './SubstitutionPanel';
 import { DiceRoller } from './DiceRoller';
 import type { DiceRollResult } from '../types/game';
 
+function formatDefenseFormation(formation?: string | null): string {
+  if (!formation) return '';
+  return formation.replace(/_/g, ' ');
+}
+
 interface GameBoardProps {
   gameId: string;
   state: GameState;
@@ -124,6 +129,13 @@ export function GameBoard({
             <div className={`last-play-card ${lastPlay.is_touchdown ? 'play-td' : lastPlay.turnover ? 'play-turnover' : ''}`}>
               <div className="last-play-label">Last Play</div>
               <div className="last-play-desc">{lastPlay.description}</div>
+              {(lastPlay.run_number != null || lastPlay.pass_number != null || lastPlay.defense_formation) && (
+                <div className="last-play-resolution">
+                  {lastPlay.run_number != null && <span>RN {lastPlay.run_number}</span>}
+                  {lastPlay.pass_number != null && <span>PN {lastPlay.pass_number}</span>}
+                  {lastPlay.defense_formation && <span>{formatDefenseFormation(lastPlay.defense_formation)}</span>}
+                </div>
+              )}
               <div className="last-play-meta">
                 <span>{lastPlay.play_type}</span>
                 <span>{lastPlay.yards >= 0 ? '+' : ''}{lastPlay.yards} yds</span>
@@ -160,7 +172,11 @@ export function GameBoard({
 
         <div className="board-right">
           {/* Letter boards for offense/defense — always visible */}
-          <LetterBoards personnel={personnel} possession={state.possession} />
+          <LetterBoards
+            personnel={personnel}
+            possession={state.possession}
+            defenseFormation={lastPlay?.defense_formation ?? undefined}
+          />
 
           <GameLog plays={state.last_plays} />
         </div>

@@ -533,7 +533,7 @@ class Game:
         elif play_call.play_type == "RUN":
             result = self._execute_run_5e(fac_card, play_call, defense_formation)
         elif play_call.play_type == "SCREEN":
-            result = self._execute_screen_5e(fac_card)
+            result = self._execute_screen_5e(fac_card, defense_formation)
         elif play_call.play_type in ("LONG_PASS", "QUICK_PASS"):
             result = self._execute_pass_5e(fac_card, play_call, defense_formation)
         else:
@@ -601,28 +601,42 @@ class Game:
         direction = direction_map.get(direction, direction)
 
         if rb:
-            return self.resolver.resolve_run_5e(
+            result = self.resolver.resolve_run_5e(
                 fac_card, self.deck, rb, direction,
                 defense_run_stop=def_run_stop,
                 defense_formation=def_formation,
             )
+            result.defense_formation = def_formation
+            return result
         yards = random.choices([-1, 0, 1, 2, 3, 4, 5],
                                 weights=[5, 8, 10, 15, 20, 15, 10])[0]
-        return PlayResult("RUN", yards, "GAIN", description=f"Run for {yards} yards")
+        return PlayResult(
+            "RUN", yards, "GAIN",
+            description=f"Run for {yards} yards",
+            defense_formation=def_formation,
+        )
 
-    def _execute_screen_5e(self, fac_card: FACCard) -> PlayResult:
+    def _execute_screen_5e(self, fac_card: FACCard,
+                           defense_formation: Optional[str] = None) -> PlayResult:
         qb = self.get_qb()
         rb = self.get_rb()
         receivers = self._get_all_receivers()
+        situation = self.state.to_situation()
+        def_formation = defense_formation or self.ai.call_defense_5e(situation, fac_card)
 
         if qb and rb:
-            return self.resolver.resolve_pass_5e(
+            result = self.resolver.resolve_pass_5e(
                 fac_card, self.deck, qb, rb, receivers,
                 pass_type="SCREEN",
             )
+            result.defense_formation = def_formation
+            return result
         yards = random.randint(2, 8)
-        return PlayResult("PASS", yards, "COMPLETE",
-                          description=f"Screen pass for {yards} yards")
+        return PlayResult(
+            "PASS", yards, "COMPLETE",
+            description=f"Screen pass for {yards} yards",
+            defense_formation=def_formation,
+        )
 
     def _execute_pass_5e(self, fac_card: FACCard, play_call: PlayCall,
                          defense_formation: Optional[str] = None) -> PlayResult:
@@ -641,13 +655,15 @@ class Game:
             pass_type = "SHORT"
 
         if qb and receiver:
-            return self.resolver.resolve_pass_5e(
+            result = self.resolver.resolve_pass_5e(
                 fac_card, self.deck, qb, receiver, receivers,
                 pass_type=pass_type,
                 defense_coverage=defense.defense_rating,
                 defense_pass_rush=defense.defense_rating,
                 defense_formation=def_formation,
             )
+            result.defense_formation = def_formation
+            return result
 
         yards = random.choices([0, 0, 5, 8, 12, 18, 25],
                                 weights=[20, 15, 15, 15, 12, 10, 5])[0]
@@ -655,6 +671,7 @@ class Game:
             "PASS", yards,
             "COMPLETE" if yards > 0 else "INCOMPLETE",
             description=f"Pass {'complete' if yards > 0 else 'incomplete'} for {yards} yards",
+            defense_formation=def_formation,
         )
 
     def simulate_drive(self) -> DriveResult:

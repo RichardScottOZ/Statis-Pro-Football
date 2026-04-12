@@ -36,6 +36,21 @@ _gen = CardGenerator()
 MAX_LAST_PLAYS = 20  # Number of recent plays to include in state responses
 
 
+def _serialize_play_result(result) -> dict:
+    """Serialize a play result for API responses."""
+    return {
+        "play_type": result.play_type,
+        "yards": result.yards_gained,
+        "result": result.result,
+        "description": result.description,
+        "is_touchdown": result.is_touchdown,
+        "turnover": result.turnover,
+        "run_number": result.run_number_used,
+        "pass_number": result.pass_number_used,
+        "defense_formation": result.defense_formation,
+    }
+
+
 # ─── Request / Response Models ──────────────────────────────────────────────
 
 class NewGameRequest(BaseModel):
@@ -143,14 +158,7 @@ def execute_play(game_id: str):
 
     return {
         "game_id": game_id,
-        "play_result": {
-            "play_type": result.play_type,
-            "yards": result.yards_gained,
-            "result": result.result,
-            "description": result.description,
-            "is_touchdown": result.is_touchdown,
-            "turnover": result.turnover,
-        },
+        "play_result": _serialize_play_result(result),
         "state": _serialize_state(game.state),
     }
 
@@ -174,14 +182,7 @@ def execute_human_play(game_id: str, request: HumanPlayCallRequest):
 
     return {
         "game_id": game_id,
-        "play_result": {
-            "play_type": result.play_type,
-            "yards": result.yards_gained,
-            "result": result.result,
-            "description": result.description,
-            "is_touchdown": result.is_touchdown,
-            "turnover": result.turnover,
-        },
+        "play_result": _serialize_play_result(result),
         "state": _serialize_state(game.state),
     }
 
@@ -214,15 +215,7 @@ def execute_human_defense(game_id: str, request: DefensivePlayCallRequest):
 
     return {
         "game_id": game_id,
-        "play_result": {
-            "play_type": result.play_type,
-            "yards": result.yards_gained,
-            "result": result.result,
-            "description": result.description,
-            "is_touchdown": result.is_touchdown,
-            "turnover": result.turnover,
-            "defense_formation": formation,
-        },
+        "play_result": _serialize_play_result(result),
         "state": _serialize_state(game.state),
     }
 

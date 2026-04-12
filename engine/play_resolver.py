@@ -53,6 +53,9 @@ class PlayResult:
     passer: Optional[str] = None
     rusher: Optional[str] = None
     receiver: Optional[str] = None
+    run_number_used: Optional[int] = None
+    pass_number_used: Optional[int] = None
+    defense_formation: Optional[str] = None
 
 
 class PlayResolver:
@@ -586,6 +589,7 @@ class PlayResolver:
                         result="SACK",
                         description=f"{qb.player_name} sacked on pass rush! {abs(loss)} yard loss.",
                         passer=qb.player_name, z_card_event=z_event,
+                        pass_number_used=pn,
                     )
                 elif pr_result == "RUNS":
                     # QB scramble — use rushing column
@@ -602,12 +606,15 @@ class PlayResolver:
                         is_touchdown=is_td,
                         description=f"{qb.player_name} scrambles for {yards} yards",
                         passer=qb.player_name, z_card_event=z_event,
+                        pass_number_used=pn,
+                        run_number_used=run_num,
                     )
                 elif pr_result == "INC":
                     return PlayResult(
                         play_type="PASS", yards_gained=0, result="INCOMPLETE",
                         description=f"{qb.player_name} hurried, pass incomplete",
                         passer=qb.player_name, z_card_event=z_event,
+                        pass_number_used=pn,
                     )
                 # pr_result == "COM" → pass completed despite rush, continue
             else:
@@ -654,12 +661,14 @@ class PlayResolver:
                         description=f"{qb.player_name} completes to {actual_receiver.player_name} for {yards} yards",
                         passer=qb.player_name, receiver=actual_receiver.player_name,
                         z_card_event=z_event,
+                        pass_number_used=pn,
                     )
                 return PlayResult(
                     play_type="PASS", yards_gained=0, result="INCOMPLETE",
                     description=f"{qb.player_name} pass incomplete to {actual_receiver.player_name}",
                     passer=qb.player_name, receiver=actual_receiver.player_name,
                     z_card_event=z_event,
+                    pass_number_used=pn,
                 )
 
             pn_str = str(pn)
@@ -685,6 +694,7 @@ class PlayResolver:
                 ),
                 passer=qb.player_name, receiver=actual_receiver.player_name,
                 z_card_event=z_event,
+                pass_number_used=pn,
             )
 
         # ── INC result ───────────────────────────────────────────────
@@ -694,6 +704,7 @@ class PlayResolver:
                 description=f"{qb.player_name} pass incomplete to {actual_receiver.player_name}",
                 passer=qb.player_name, receiver=actual_receiver.player_name,
                 z_card_event=z_event,
+                pass_number_used=pn,
             )
 
         # ── COM result — Stage 2: RUN NUMBER → receiver pass gain ────
@@ -747,6 +758,8 @@ class PlayResolver:
                         description=f"{qb.player_name} pass dropped by {target_receiver.player_name}",
                         passer=qb.player_name, receiver=target_receiver.player_name,
                         z_card_event=z_event,
+                        pass_number_used=pn,
+                        run_number_used=run_num,
                     )
                 yards = rec_data.get("yards", 8)
                 is_td = rec_data.get("td", False)
@@ -776,6 +789,8 @@ class PlayResolver:
             description=desc,
             passer=qb.player_name, receiver=target_receiver.player_name,
             z_card_event=z_event,
+            pass_number_used=pn,
+            run_number_used=run_num,
         )
 
     def _resolve_screen_5e(self, fac_card: FACCard, qb: PlayerCard,
@@ -881,6 +896,7 @@ class PlayResolver:
         run_num = fac_card.run_num_int
         is_oob = fac_card.is_out_of_bounds
         rn_str = str(run_num) if run_num is not None else "1"
+        used_run_num = run_num if run_num is not None else 1
 
         # Effective run-stop
         eff_run_stop = effective_run_stop(defense_run_stop, defense_formation)
@@ -906,6 +922,7 @@ class PlayResolver:
                         is_touchdown=is_td,
                         description=desc,
                         rusher=rusher.player_name, z_card_event=z_event,
+                        run_number_used=used_run_num,
                     )
                 else:
                     try:
@@ -931,6 +948,7 @@ class PlayResolver:
                         f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
                     ),
                     rusher=rusher.player_name, z_card_event=z_event,
+                    run_number_used=used_run_num,
                 )
 
             # Out of bounds
@@ -941,6 +959,7 @@ class PlayResolver:
                     result="OOB", out_of_bounds=True,
                     description=desc, rusher=rusher.player_name,
                     z_card_event=z_event,
+                    run_number_used=used_run_num,
                 )
 
             is_td = random.random() < 0.03
@@ -956,6 +975,7 @@ class PlayResolver:
                 is_touchdown=is_td,
                 description=desc,
                 rusher=rusher.player_name, z_card_event=z_event,
+                run_number_used=used_run_num,
             )
 
         # ── Legacy: fall back to old slot-based columns ──────────────
@@ -975,6 +995,7 @@ class PlayResolver:
                 play_type="RUN", yards_gained=yards, result="GAIN",
                 description=f"{rusher.player_name} runs for {yards} yards",
                 rusher=rusher.player_name, z_card_event=z_event,
+                run_number_used=used_run_num,
             )
 
         play_data = column.get(rn_str, {"result": "GAIN", "yards": 2, "td": False})
@@ -999,6 +1020,7 @@ class PlayResolver:
                 result="OOB", out_of_bounds=True,
                 description=desc, rusher=rusher.player_name,
                 z_card_event=z_event,
+                run_number_used=used_run_num,
             )
 
         # ── Fumble ───────────────────────────────────────────────────
@@ -1013,6 +1035,7 @@ class PlayResolver:
                     turnover=True, turnover_type="FUMBLE",
                     description=f"{rusher.player_name} fumbles! Returned for TD!",
                     rusher=rusher.player_name, z_card_event=z_event,
+                    run_number_used=used_run_num,
                 )
             return PlayResult(
                 play_type="RUN", yards_gained=yards,
@@ -1023,6 +1046,7 @@ class PlayResolver:
                     f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
                 ),
                 rusher=rusher.player_name, z_card_event=z_event,
+                run_number_used=used_run_num,
             )
 
         # ── Breakaway ────────────────────────────────────────────────
@@ -1037,6 +1061,7 @@ class PlayResolver:
                 is_touchdown=is_td,
                 description=desc,
                 rusher=rusher.player_name, z_card_event=z_event,
+                run_number_used=used_run_num,
             )
 
         # ── Normal gain ──────────────────────────────────────────────
@@ -1054,6 +1079,7 @@ class PlayResolver:
                     f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
                 ),
                 rusher=rusher.player_name, z_card_event=z_event,
+                run_number_used=used_run_num,
             )
 
         desc = f"{rusher.player_name} runs {play_direction}"
@@ -1069,4 +1095,5 @@ class PlayResolver:
             description=desc,
             rusher=rusher.player_name,
             z_card_event=z_event,
+            run_number_used=used_run_num,
         )
