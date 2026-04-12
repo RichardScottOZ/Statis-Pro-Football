@@ -11,6 +11,13 @@ from .team import Team
 from .play_resolver import PlayResolver, PlayResult
 from .solitaire import SolitaireAI, GameSituation, PlayCall
 from .charts import Charts
+from .play_types import (
+    DefensivePlay, DefensiveFormation, DefensiveStrategy,
+    OffensivePlay, OffensiveStrategy, PlayerInvolved,
+    OFFENSIVE_PLAY_NAMES, DEFENSIVE_PLAY_NAMES,
+    OFFENSIVE_STRATEGY_NAMES, DEFENSIVE_STRATEGY_NAMES,
+    PLAYER_INVOLVED_NAMES, LEGACY_FORMATION_TO_PLAY,
+)
 
 
 class Quarter(int, Enum):
@@ -535,12 +542,31 @@ class Game:
         if play_call is None:
             play_call = self.ai.call_play_5e(situation, fac_card)
 
+        # ── 5E Play calling with proper types ────────────────────────
+        off_play, off_strategy, player_inv = self.ai.call_offense_play_5e(situation, fac_card)
+        def_formation_5e, def_play_5e, def_strategy_5e = self.ai.call_defense_play_5e(
+            situation, fac_card
+        )
+
+        off_call_str = (
+            f"{OFFENSIVE_PLAY_NAMES.get(off_play, off_play.value)}"
+            f" / {OFFENSIVE_STRATEGY_NAMES.get(off_strategy, off_strategy.value)}"
+            f" / {PLAYER_INVOLVED_NAMES.get(player_inv, player_inv.value)}"
+        )
+        def_call_str = (
+            f"{def_formation_5e.value} Formation"
+            f" / {DEFENSIVE_PLAY_NAMES.get(def_play_5e, def_play_5e.value)}"
+            f" / {DEFENSIVE_STRATEGY_NAMES.get(def_strategy_5e, def_strategy_5e.value)}"
+        )
+
         self.state.play_log.append(
             f"Q{self.state.quarter} {self._time_str()} | "
             f"{'Home' if self.state.possession == 'home' else 'Away'} ball | "
             f"{self.state.down}{self._ordinal_suffix(self.state.down)} & {self.state.distance} | "
             f"Own {self.state.yard_line}"
         )
+        self.state.play_log.append(f"  OFFENSE: {off_call_str}")
+        self.state.play_log.append(f"  DEFENSE: {def_call_str}")
 
         # ── 5E Play restrictions ─────────────────────────────────────
         # Long pass within opponent's 20 → auto-convert to short pass
@@ -641,6 +667,11 @@ class Game:
             result = self._execute_pass_5e(fac_card, play_call, defense_formation)
 
         self.state.play_log.append(f"  → {result.description}")
+
+        # ── Attach 5E play call info to result ────────────────────────
+        result.offensive_play_call = off_call_str
+        result.defensive_play_call = def_call_str
+        result.defensive_play = def_play_5e.value
 
         # ── 5E Injury tracking: process Z-card injuries ──────────────
         if result.z_card_event and result.z_card_event.get("type") == "INJURY":

@@ -51,6 +51,9 @@ def _serialize_play_result(result) -> dict:
         "strategy": result.strategy,
         "injury_player": result.injury_player,
         "injury_duration": result.injury_duration,
+        "offensive_play_call": result.offensive_play_call,
+        "defensive_play_call": result.defensive_play_call,
+        "defensive_play": result.defensive_play,
     }
 
 
@@ -73,6 +76,8 @@ class HumanPlayCallRequest(BaseModel):
 
 class DefensivePlayCallRequest(BaseModel):
     formation: str = "4_3"  # 4_3, 3_4, 4_3_BLITZ, 3_4_ZONE, NICKEL_BLITZ, NICKEL_ZONE, NICKEL_COVER2, GOAL_LINE, 4_3_COVER2
+    defensive_play: str = "PASS_DEFENSE"  # PASS_DEFENSE, PREVENT_DEFENSE, RUN_DEFENSE_NO_KEY, etc.
+    defensive_strategy: str = "NONE"  # NONE, DOUBLE_COVERAGE, TRIPLE_COVERAGE
 
 
 class SubstitutionRequest(BaseModel):
@@ -197,12 +202,23 @@ VALID_FORMATIONS = {
     "NICKEL_BLITZ", "NICKEL_ZONE", "NICKEL_COVER2", "GOAL_LINE",
 }
 
+VALID_DEFENSIVE_PLAYS = {
+    "PASS_DEFENSE", "PREVENT_DEFENSE", "RUN_DEFENSE_NO_KEY",
+    "RUN_DEFENSE_KEY_BACK_1", "RUN_DEFENSE_KEY_BACK_2",
+    "RUN_DEFENSE_KEY_BACK_3", "BLITZ",
+}
+
+VALID_DEFENSIVE_STRATEGIES = {
+    "NONE", "DOUBLE_COVERAGE", "TRIPLE_COVERAGE", "ALT_DOUBLE_COVERAGE",
+}
+
 
 @app.post("/games/{game_id}/human-defense")
 def execute_human_defense(game_id: str, request: DefensivePlayCallRequest):
     """Execute a play where the human calls the defensive formation.
 
     The offense is AI-controlled while the human picks the defense.
+    Accepts both legacy formation strings and new 5E defensive play types.
     """
     game = _get_game(game_id)
 
@@ -214,6 +230,20 @@ def execute_human_defense(game_id: str, request: DefensivePlayCallRequest):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid formation: {formation}. Valid: {sorted(VALID_FORMATIONS)}",
+        )
+
+    defensive_play = request.defensive_play.upper()
+    if defensive_play not in VALID_DEFENSIVE_PLAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid defensive play: {defensive_play}. Valid: {sorted(VALID_DEFENSIVE_PLAYS)}",
+        )
+
+    defensive_strategy = request.defensive_strategy.upper()
+    if defensive_strategy not in VALID_DEFENSIVE_STRATEGIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid defensive strategy: {defensive_strategy}. Valid: {sorted(VALID_DEFENSIVE_STRATEGIES)}",
         )
 
     result = game.execute_play(defense_formation=formation)

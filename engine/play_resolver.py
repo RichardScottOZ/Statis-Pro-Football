@@ -59,6 +59,9 @@ class PlayResult:
     strategy: Optional[str] = None  # Offensive strategy used (FLOP, SNEAK, DRAW, PLAY_ACTION)
     injury_player: Optional[str] = None  # Player injured this play
     injury_duration: Optional[int] = None  # Injury duration in plays
+    offensive_play_call: Optional[str] = None   # Display string for offensive call
+    defensive_play_call: Optional[str] = None   # Display string for defensive call
+    defensive_play: Optional[str] = None        # DefensivePlay value used
 
 
 class BigPlayDefense:

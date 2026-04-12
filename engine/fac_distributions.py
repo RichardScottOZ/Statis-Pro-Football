@@ -724,10 +724,26 @@ FORMATION_MODIFIERS: Dict[str, Dict[str, int]] = {
     "GOAL_LINE":    {"pass_rush": 5,   "coverage": -15, "run_stop": 20},
 }
 
+# 5E Defensive Play modifiers (keyed by DefensivePlay enum values)
+DEFENSIVE_PLAY_MODIFIERS: Dict[str, Dict[str, int]] = {
+    "PASS_DEFENSE":          {"pass_rush": 0,   "coverage": 5,   "run_stop": -5},
+    "PREVENT_DEFENSE":       {"pass_rush": -5,  "coverage": 10,  "run_stop": -10},
+    "RUN_DEFENSE_NO_KEY":    {"pass_rush": 0,   "coverage": -5,  "run_stop": 5},
+    "RUN_DEFENSE_KEY_BACK_1":{"pass_rush": 0,   "coverage": -5,  "run_stop": 10},
+    "RUN_DEFENSE_KEY_BACK_2":{"pass_rush": 0,   "coverage": -5,  "run_stop": 10},
+    "RUN_DEFENSE_KEY_BACK_3":{"pass_rush": 0,   "coverage": -5,  "run_stop": 10},
+    "BLITZ":                 {"pass_rush": 15,  "coverage": -10, "run_stop": 0},
+}
+
 
 def get_formation_modifier(formation: str) -> Dict[str, int]:
     """Return the {pass_rush, coverage, run_stop} modifier for a formation."""
     return FORMATION_MODIFIERS.get(formation, {"pass_rush": 0, "coverage": 0, "run_stop": 0})
+
+
+def get_defensive_play_modifier(defensive_play: str) -> Dict[str, int]:
+    """Return the {pass_rush, coverage, run_stop} modifier for a 5E defensive play."""
+    return DEFENSIVE_PLAY_MODIFIERS.get(defensive_play, {"pass_rush": 0, "coverage": 0, "run_stop": 0})
 
 
 def effective_pass_rush(base_rating: int, formation: str,
