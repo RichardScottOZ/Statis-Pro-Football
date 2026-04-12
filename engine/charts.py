@@ -141,6 +141,51 @@ class Charts:
         )[0]
         return yards, yards == 99
 
+    # ── 5th-Edition Interception Return Table (Rule 25) ──────────────
+
+    INT_RETURN_TABLE_5E: Dict[int, Dict[str, Any]] = {
+        1:  {"line": 5,  "lb": 30, "db": "TD"},
+        2:  {"line": 10, "lb": 20, "db": 50},
+        3:  {"line": 5,  "lb": 15, "db": 40},
+        4:  {"line": 0,  "lb": 10, "db": 30},
+        5:  {"line": 0,  "lb": 5,  "db": 25},
+        6:  {"line": 0,  "lb": 5,  "db": 20},
+        7:  {"line": 0,  "lb": 0,  "db": 15},
+        8:  {"line": 0,  "lb": 0,  "db": 10},
+        9:  {"line": 0,  "lb": 0,  "db": 5},
+        10: {"line": 0,  "lb": 0,  "db": 0},
+        11: {"line": 0,  "lb": 0,  "db": 0},
+        12: {"line": 0,  "lb": 0,  "db": 0},
+    }
+
+    @staticmethod
+    def roll_int_return_5e(run_number: int, defender_position: str) -> Tuple[int, bool]:
+        """Return (return_yards, is_td) using the 5E 12-entry INT return table.
+
+        Parameters
+        ----------
+        run_number : int
+            The run number drawn (1-12).
+        defender_position : str
+            Position of the intercepting defender: 'DL', 'LB', 'CB', 'S',
+            or any other.  DL uses the 'line' column, LB uses 'lb',
+            and all DBs (CB, S, DB) use 'db'.
+        """
+        rn = max(1, min(12, run_number))
+        entry = Charts.INT_RETURN_TABLE_5E[rn]
+
+        pos_upper = defender_position.upper() if defender_position else "DB"
+        if pos_upper in ("DL", "DE", "DT", "NT"):
+            val = entry["line"]
+        elif pos_upper == "LB":
+            val = entry["lb"]
+        else:
+            val = entry["db"]
+
+        if val == "TD":
+            return 99, True
+        return int(val), False
+
     @staticmethod
     def roll_fumble_return() -> Tuple[int, bool]:
         yards = random.choices(
