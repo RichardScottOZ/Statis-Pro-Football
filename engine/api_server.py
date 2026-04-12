@@ -57,6 +57,8 @@ def _serialize_play_result(result) -> dict:
         "passer": result.passer,
         "rusher": result.rusher,
         "receiver": result.receiver,
+        "bv_tv_result": result.bv_tv_result,
+        "interception_point": result.interception_point,
         "debug_log": getattr(result, 'debug_log', []),
     }
 
@@ -69,6 +71,8 @@ class NewGameRequest(BaseModel):
     season: str = "2025_5e"
     solitaire_home: bool = True
     solitaire_away: bool = True
+    seed: Optional[int] = None  # Random seed for reproducible games
+    use_5e: Optional[bool] = None  # Explicit 5E mode toggle (auto-detected from season if None)
 
 
 class HumanPlayCallRequest(BaseModel):
@@ -142,8 +146,9 @@ def new_game(request: NewGameRequest):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    use_5e = "5e" in str(request.season)
-    game = Game(home, away, request.solitaire_home, request.solitaire_away, use_5e=use_5e)
+    use_5e = request.use_5e if request.use_5e is not None else ("5e" in str(request.season))
+    game = Game(home, away, request.solitaire_home, request.solitaire_away,
+                use_5e=use_5e, seed=request.seed)
     game_id = f"{request.away_team}@{request.home_team}_{random.randint(1000, 9999)}"
     _active_games[game_id] = game
 
@@ -590,6 +595,10 @@ def _serialize_state(state: GameState) -> dict:
         "timeouts_away": state.timeouts_away,
         "last_plays": state.play_log[-MAX_LAST_PLAYS:] if state.play_log else [],
         "injuries": state.injuries,
+        "penalties": state.penalties,
+        "penalty_yards": state.penalty_yards,
+        "turnovers": state.turnovers,
+        "player_stats": state.player_stats,
     }
 
 
@@ -764,6 +773,54 @@ def execute_two_point_conversion(game_id: str, request: TwoPointConversionReques
         "game_id": game_id,
         "result": result_desc,
         "play_result": _serialize_play_result(result),
+        "state": _serialize_state(game.state),
+    }
+
+
+# ─── Big Play Defense Endpoint ──────────────────────────────────────────────
+
+class BigPlayDefenseRequest(BaseModel):
+    team: str = "defense"  # 'home' or 'away' or 'defense' (auto-detect defending team)
+
+
+@app.post("/games/{game_id}/big-play-defense")
+def activate_big_play_defense(game_id: str, request: BigPlayDefenseRequest):
+    """Activate Big Play Defense for the specified team this defensive series."""
+    game = _get_game(game_id)
+    if game.state.is_over:
+        raise HTTPException(status_code=400, detail="Game is over")
+
+    team = request.team
+    if team == "defense":
+        team = "away" if game.state.possession == "home" else "home"
+
+    result = game.activate_big_play_defense(team)
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail="Big Play Defense not available (already used this series, or team not eligible)",
+        )
+    return {
+        "game_id": game_id,
+        "message": f"Big Play Defense activated for {team}",
+        "state": _serialize_state(game.state),
+    }
+
+
+# ─── Two-Minute Offense Endpoint ───────────────────────────────────────────
+
+@app.post("/games/{game_id}/two-minute-offense")
+def declare_two_minute_offense(game_id: str):
+    """Declare two-minute offense mode (manual toggle)."""
+    game = _get_game(game_id)
+    if game.state.is_over:
+        raise HTTPException(status_code=400, detail="Game is over")
+
+    game.declare_two_minute_offense()
+    return {
+        "game_id": game_id,
+        "message": "Two-minute offense declared",
+        "two_minute_offense": True,
         "state": _serialize_state(game.state),
     }
 

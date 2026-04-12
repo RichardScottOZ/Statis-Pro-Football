@@ -230,6 +230,11 @@ class PlayerCard:
     # ── Punter ────────────────────────────────────────────────────────
     avg_distance: float = 44.0
     inside_20_rate: float = 0.35
+    blocked_punt_number: int = 0  # RN that triggers a blocked punt (0 = none)
+    punt_return_pct: float = 0.60  # Fraction of punts returned vs fair catch
+
+    # ── Kicker (extended) ────────────────────────────────────────────
+    longest_kick: int = 50  # Kicker's longest made FG (for over-51 table)
 
     # ── Offensive Line ────────────────────────────────────────────────
     run_block_rating: int = 0   # OL run-blocking grade (0-99)

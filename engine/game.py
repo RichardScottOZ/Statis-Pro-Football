@@ -67,6 +67,13 @@ class GameState:
     # 5E: Track last play's ball carrier for endurance
     last_ball_carrier: Optional[str] = None
     prev_ball_carrier: Optional[str] = None  # Two plays ago for endurance 2
+    # Penalty tracking: {team: count}
+    penalties: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
+    penalty_yards: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
+    # Turnover tracking: {team: count}
+    turnovers: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
+    # Player stats: {player_name: {stat_type: value}}
+    player_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def get_possession_team(self) -> str:
         return self.possession
@@ -127,6 +134,11 @@ class Game:
         self._last_play_had_defensive_penalty: bool = False
         # 5E: Track last play time consumption for timeout restriction
         self._last_play_time: int = 0
+        # 5E: Manual two-minute offense declaration
+        self._two_minute_declared: bool = False
+        # 5E: Big play defense state per team
+        from .play_resolver import BigPlayDefense
+        self._big_play_defense = {"home": BigPlayDefense(), "away": BigPlayDefense()}
 
         self.state.possession = random.choice(["home", "away"])
         self.state.play_log.append(f"Coin flip: {self.state.possession} team receives")
@@ -174,6 +186,72 @@ class Game:
 
     def get_punter(self) -> Optional[PlayerCard]:
         return self.get_offense_team().roster.get_starter("P")
+
+    def _track_play_stats(self, result) -> None:
+        """Track player stats and game-level penalty/turnover counts."""
+        stats = self.state.player_stats
+        team = self.state.possession
+
+        # Track penalties
+        if result.penalty:
+            pen_type = result.penalty.get("type", "")
+            is_def = "DEF" in pen_type or result.penalty.get("auto_first", False)
+            pen_team = self.state.get_defense_team() if is_def else team
+            self.state.penalties[pen_team] = self.state.penalties.get(pen_team, 0) + 1
+            self.state.penalty_yards[pen_team] = (
+                self.state.penalty_yards.get(pen_team, 0) + result.penalty.get("yards", 0)
+            )
+
+        # Track turnovers
+        if result.turnover:
+            self.state.turnovers[team] = self.state.turnovers.get(team, 0) + 1
+
+        # Track rushing stats
+        if result.rusher:
+            name = result.rusher
+            if name not in stats:
+                stats[name] = {"rushing_yards": 0, "rushing_attempts": 0, "rushing_tds": 0,
+                               "receiving_yards": 0, "receptions": 0, "receiving_tds": 0,
+                               "passing_yards": 0, "pass_attempts": 0, "completions": 0,
+                               "passing_tds": 0, "interceptions": 0, "sacks": 0}
+            if result.play_type == "RUN":
+                stats[name]["rushing_yards"] += result.yards_gained
+                stats[name]["rushing_attempts"] += 1
+                if result.is_touchdown:
+                    stats[name]["rushing_tds"] += 1
+
+        # Track passing stats
+        if result.passer:
+            name = result.passer
+            if name not in stats:
+                stats[name] = {"rushing_yards": 0, "rushing_attempts": 0, "rushing_tds": 0,
+                               "receiving_yards": 0, "receptions": 0, "receiving_tds": 0,
+                               "passing_yards": 0, "pass_attempts": 0, "completions": 0,
+                               "passing_tds": 0, "interceptions": 0, "sacks": 0}
+            if result.play_type == "PASS":
+                stats[name]["pass_attempts"] += 1
+                if result.result in ("GAIN", "TD", "COMPLETE"):
+                    stats[name]["completions"] += 1
+                    stats[name]["passing_yards"] += result.yards_gained
+                    if result.is_touchdown:
+                        stats[name]["passing_tds"] += 1
+                elif result.result == "INT":
+                    stats[name]["interceptions"] += 1
+                elif result.result == "SACK":
+                    stats[name]["sacks"] += 1
+
+        # Track receiving stats
+        if result.receiver and result.play_type == "PASS" and result.result in ("GAIN", "TD", "COMPLETE"):
+            name = result.receiver
+            if name not in stats:
+                stats[name] = {"rushing_yards": 0, "rushing_attempts": 0, "rushing_tds": 0,
+                               "receiving_yards": 0, "receptions": 0, "receiving_tds": 0,
+                               "passing_yards": 0, "pass_attempts": 0, "completions": 0,
+                               "passing_tds": 0, "interceptions": 0, "sacks": 0}
+            stats[name]["receptions"] += 1
+            stats[name]["receiving_yards"] += result.yards_gained
+            if result.is_touchdown:
+                stats[name]["receiving_tds"] += 1
 
     def _advance_down(self, yards: int) -> bool:
         """Advance down counter. Returns True if first down achieved."""
@@ -277,6 +355,9 @@ class Game:
             result = self._execute_pass(dice, play_call, defense_formation)
 
         self.state.play_log.append(f"  \u2192 {result.description}")
+
+        # Track stats
+        self._track_play_stats(result)
 
         if result.penalty:
             self._apply_penalty(result.penalty)
@@ -814,6 +895,9 @@ class Game:
         for name in to_remove:
             del self.state.injuries[name]
 
+        # Track player stats
+        self._track_play_stats(result)
+
         if result.penalty:
             self._apply_penalty(result.penalty)
             return result
@@ -1186,12 +1270,16 @@ class Game:
         """Check if two-minute offense conditions are met.
 
         5E rules: 4th quarter, prior to 2:00, trailing by up to 20 points.
+        Also active if manually declared.
         """
         return (
-            self.state.quarter == 4
-            and self.state.time_remaining <= 120
-            and self.state.score_diff() < 0
-            and self.state.score_diff() >= -20
+            getattr(self, '_two_minute_declared', False)
+            or (
+                self.state.quarter == 4
+                and self.state.time_remaining <= 120
+                and self.state.score_diff() < 0
+                and self.state.score_diff() >= -20
+            )
         )
 
     def _apply_two_minute_time(self, base_seconds: int) -> int:
@@ -1210,3 +1298,34 @@ class Game:
         if play_type in ("RUN", "SCREEN") and yards > 0:
             return max(1, yards // 2)
         return yards
+
+    def activate_big_play_defense(self, team: str) -> bool:
+        """Activate Big Play Defense for the specified team this defensive series.
+
+        Returns True if successfully activated, False otherwise.
+        """
+        if not hasattr(self, '_big_play_defense'):
+            from .play_resolver import BigPlayDefense
+            self._big_play_defense = {"home": BigPlayDefense(), "away": BigPlayDefense()}
+
+        bpd = self._big_play_defense.get(team)
+        if bpd is None:
+            return False
+
+        # Check eligibility (needs 9+ wins)
+        team_obj = self.home_team if team == "home" else self.away_team
+        wins = getattr(team_obj, 'wins', 10)  # Default eligible
+        if not BigPlayDefense.is_eligible(wins):
+            return False
+
+        if bpd._used_this_series:
+            return False
+
+        bpd._used_this_series = True
+        self.state.play_log.append(f"🛡️ Big Play Defense activated by {team} team!")
+        return True
+
+    def declare_two_minute_offense(self):
+        """Manually declare two-minute offense mode."""
+        self._two_minute_declared = True
+        self.state.play_log.append("⏱️ Two-minute offense declared!")

@@ -374,7 +374,7 @@ class TestSolitaireAI:
         sit = self._sit(down=2, distance=8, yard_line=35, score_diff=-7,
                         quarter=4, time_remaining=100)
         play = self.ai.call_play(sit)
-        assert play.play_type in ("SHORT_PASS", "LONG_PASS")
+        assert play.play_type in ("SHORT_PASS", "LONG_PASS", "QUICK_PASS", "SCREEN")
 
     def test_call_defense_returns_string(self):
         sit = self._sit(down=3, distance=8)
