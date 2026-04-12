@@ -28,6 +28,9 @@ export interface PlayResult {
   description: string;
   is_touchdown: boolean;
   turnover: boolean;
+  run_number?: number | null;
+  pass_number?: number | null;
+  defense_formation?: string | null;
 }
 
 export interface DriveResult {

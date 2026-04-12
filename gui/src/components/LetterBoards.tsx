@@ -4,6 +4,7 @@ import type { PersonnelData, PlayerBrief } from '../types/game';
 interface LetterBoardsProps {
   personnel: PersonnelData | null;
   possession: string;
+  defenseFormation?: string;
 }
 
 /** Scale intercept_range (0-14) to a 0-100% bar width. */
@@ -241,9 +242,126 @@ function OLSlot({ label }: { label: string }) {
   );
 }
 
+type DefensiveSlot = {
+  key: string;
+  label: string;
+  player: PlayerBrief | null;
+};
+
+function takeFirst(group: PlayerBrief[][]): PlayerBrief | null {
+  for (const queue of group) {
+    if (queue.length > 0) return queue.shift() ?? null;
+  }
+  return null;
+}
+
+function defenseFamily(formation?: string): '4_3' | '3_4' | 'NICKEL' | 'GOAL_LINE' {
+  if (!formation) return '4_3';
+  if (formation.startsWith('3_4')) return '3_4';
+  if (formation.startsWith('NICKEL')) return 'NICKEL';
+  if (formation === 'GOAL_LINE') return 'GOAL_LINE';
+  return '4_3';
+}
+
+function buildDefensiveLineSlots(players: PlayerBrief[]): DefensiveSlot[] {
+  const ends = players.filter(p => p.position.toUpperCase() === 'DE');
+  const noses = players.filter(p => p.position.toUpperCase() === 'NT');
+  const tackles = players.filter(p => ['DT', 'DL'].includes(p.position.toUpperCase()));
+  const extras = players.filter(p => !['DE', 'DT', 'DL', 'NT'].includes(p.position.toUpperCase()));
+
+  const assignments = [
+    takeFirst([ends, extras]),
+    takeFirst([tackles, extras]),
+    takeFirst([noses, extras]),
+    takeFirst([tackles, extras]),
+    takeFirst([ends, extras]),
+  ];
+
+  return ['DE', 'DT', 'NT', 'DT', 'DE'].map((label, index) => ({
+    key: `dl-${index}`,
+    label,
+    player: assignments[index],
+  }));
+}
+
+function buildLinebackerSlots(players: PlayerBrief[], formation?: string): DefensiveSlot[] {
+  const family = defenseFamily(formation);
+  const activeByFamily: Record<typeof family, number[]> = {
+    '4_3': [0, 2, 4],
+    '3_4': [0, 1, 3, 4],
+    'NICKEL': [1, 2, 3],
+    'GOAL_LINE': [0, 1, 2, 3, 4],
+  };
+  const labels = ['OLB', 'ILB', 'MLB', 'ILB', 'OLB'];
+  const olbs = players.filter(p => p.position.toUpperCase() === 'OLB');
+  const ilbs = players.filter(p => p.position.toUpperCase() === 'ILB');
+  const mlbs = players.filter(p => p.position.toUpperCase() === 'MLB');
+  const extras = players.filter(p => !['OLB', 'ILB', 'MLB'].includes(p.position.toUpperCase()));
+  const active = new Set(activeByFamily[family]);
+
+  return labels.map((label, index) => {
+    if (!active.has(index)) {
+      return { key: `lb-${index}`, label, player: null };
+    }
+
+    const player =
+      label === 'OLB' ? takeFirst([olbs, extras]) :
+      label === 'ILB' ? takeFirst([ilbs, extras]) :
+      takeFirst([mlbs, extras]);
+
+    return { key: `lb-${index}`, label, player };
+  });
+}
+
+function buildSecondarySlots(players: PlayerBrief[], formation?: string): DefensiveSlot[] {
+  const family = defenseFamily(formation);
+  const activeByFamily: Record<typeof family, number[]> = {
+    '4_3': [0, 1, 2, 4],
+    '3_4': [0, 1, 2, 4],
+    'NICKEL': [0, 1, 2, 3, 4],
+    'GOAL_LINE': [0, 1, 2, 4],
+  };
+  const labels = ['CB', 'SS', 'FS', 'OBOX', 'CB'];
+  const cbs = players.filter(p => p.position.toUpperCase() === 'CB');
+  const strongSafeties = players.filter(p => p.position.toUpperCase() === 'SS');
+  const freeSafeties = players.filter(p => p.position.toUpperCase() === 'FS');
+  const safeties = players.filter(p => ['S', 'DB'].includes(p.position.toUpperCase()));
+  const extras = players.filter(p => !['CB', 'SS', 'FS', 'S', 'DB'].includes(p.position.toUpperCase()));
+  const active = new Set(activeByFamily[family]);
+
+  return labels.map((label, index) => {
+    if (!active.has(index)) {
+      return { key: `db-${index}`, label, player: null };
+    }
+
+    const player =
+      label === 'CB' ? takeFirst([cbs, safeties, extras]) :
+      label === 'SS' ? takeFirst([strongSafeties, safeties, extras]) :
+      label === 'FS' ? takeFirst([freeSafeties, safeties, extras]) :
+      takeFirst([safeties, cbs, extras]);
+
+    return { key: `db-${index}`, label, player };
+  });
+}
+
+function DefensiveSlotCard({ slot }: { slot: DefensiveSlot }) {
+  return (
+    <div className="board-slot">
+      <div className="board-slot-label">{slot.label}</div>
+      {slot.player ? (
+        <MiniCard player={slot.player} isDefender />
+      ) : (
+        <div className="mini-card mini-card-slot">
+          <div className="mc-pos-only">{slot.label}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── LetterBoards main component ─────────────────────────────── */
 
-export function LetterBoards({ personnel }: LetterBoardsProps) {
+export function LetterBoards({ personnel, defenseFormation }: LetterBoardsProps) {
   const [collapsed, setCollapsed] = useState<{ off: boolean; def: boolean }>({ off: false, def: false });
 
   if (!personnel) {
@@ -253,6 +371,10 @@ export function LetterBoards({ personnel }: LetterBoardsProps) {
       </div>
     );
   }
+
+  const defensiveLineSlots = buildDefensiveLineSlots(personnel.defense_line);
+  const linebackerSlots = buildLinebackerSlots(personnel.linebackers, defenseFormation);
+  const secondarySlots = buildSecondarySlots(personnel.defensive_backs, defenseFormation);
 
   return (
     <div className="letter-boards">
@@ -331,43 +453,34 @@ export function LetterBoards({ personnel }: LetterBoardsProps) {
             {/* Row 1: Defensive Line (a-f) */}
             <div className="board-row board-row-label">
               <span className="row-label-text">DEFENSIVE LINE</span>
-              <span className="row-letters">a–f</span>
+              <span className="row-letters">DE DT NT DT DE</span>
             </div>
             <div className="board-row board-row-dl">
-              {personnel.defense_line.map((p, i) => (
-                <MiniCard key={`dl-${i}`} player={p} isDefender />
+              {defensiveLineSlots.map(slot => (
+                <DefensiveSlotCard key={slot.key} slot={slot} />
               ))}
-              {personnel.defense_line.length === 0 && (
-                <span className="board-empty">No DL data</span>
-              )}
             </div>
 
             {/* Row 2: Linebackers (g-k) */}
             <div className="board-row board-row-label">
               <span className="row-label-text">LINEBACKERS</span>
-              <span className="row-letters">g–k</span>
+              <span className="row-letters">OLB ILB MLB ILB OLB</span>
             </div>
             <div className="board-row board-row-lb">
-              {personnel.linebackers.map((p, i) => (
-                <MiniCard key={`lb-${i}`} player={p} isDefender />
+              {linebackerSlots.map(slot => (
+                <DefensiveSlotCard key={slot.key} slot={slot} />
               ))}
-              {personnel.linebackers.length === 0 && (
-                <span className="board-empty">No LB data</span>
-              )}
             </div>
 
             {/* Row 3: Defensive Backs (l-p) */}
             <div className="board-row board-row-label">
               <span className="row-label-text">DEFENSIVE BACKS</span>
-              <span className="row-letters">l–p</span>
+              <span className="row-letters">CB SS FS OBOX CB</span>
             </div>
             <div className="board-row board-row-db">
-              {personnel.defensive_backs.map((p, i) => (
-                <MiniCard key={`db-${i}`} player={p} isDefender />
+              {secondarySlots.map(slot => (
+                <DefensiveSlotCard key={slot.key} slot={slot} />
               ))}
-              {personnel.defensive_backs.length === 0 && (
-                <span className="board-empty">No DB data</span>
-              )}
             </div>
           </>
         )}
@@ -375,4 +488,3 @@ export function LetterBoards({ personnel }: LetterBoardsProps) {
     </div>
   );
 }
-
