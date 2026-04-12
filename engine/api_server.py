@@ -41,7 +41,7 @@ MAX_LAST_PLAYS = 20  # Number of recent plays to include in state responses
 class NewGameRequest(BaseModel):
     home_team: str
     away_team: str
-    season: int = 2025
+    season: str = "2025_5e"
     solitaire_home: bool = True
     solitaire_away: bool = True
 
@@ -75,14 +75,14 @@ def root():
 
 
 @app.get("/teams")
-def get_teams(season: int = 2025):
+def get_teams(season: str = "2025_5e"):
     """List all available teams."""
     teams = list_available_teams(season)
     return {"teams": sorted(teams), "season": season}
 
 
 @app.get("/teams/{team_abbr}")
-def get_team(team_abbr: str, season: int = 2025):
+def get_team(team_abbr: str, season: str = "2025_5e"):
     """Get team data."""
     try:
         team = Team.load(team_abbr.upper(), season)
@@ -92,7 +92,7 @@ def get_team(team_abbr: str, season: int = 2025):
 
 
 @app.get("/teams/{team_abbr}/roster")
-def get_roster(team_abbr: str, season: int = 2025):
+def get_roster(team_abbr: str, season: str = "2025_5e"):
     """Get team roster."""
     try:
         team = Team.load(team_abbr.upper(), season)
@@ -113,7 +113,8 @@ def new_game(request: NewGameRequest):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    game = Game(home, away, request.solitaire_home, request.solitaire_away)
+    use_5e = "5e" in str(request.season)
+    game = Game(home, away, request.solitaire_home, request.solitaire_away, use_5e=use_5e)
     game_id = f"{request.away_team}@{request.home_team}_{random.randint(1000, 9999)}"
     _active_games[game_id] = game
 
@@ -285,7 +286,7 @@ def roll_dice():
 
 
 @app.get("/cards/{team_abbr}/{player_name}")
-def get_player_card(team_abbr: str, player_name: str, season: int = 2025):
+def get_player_card(team_abbr: str, player_name: str, season: str = "2025_5e"):
     """Get a player's card."""
     try:
         team = Team.load(team_abbr.upper(), season)
@@ -360,6 +361,23 @@ def get_personnel(game_id: str):
 
     defense_players = [_player_brief(p) for p in defense_team.roster.defenders[:11]]
 
+    # Group defenders by position for board layout (DL/LB/DB rows)
+    defense_line = []
+    linebackers = []
+    defensive_backs = []
+    for p in defense_team.roster.defenders[:11]:
+        brief = _player_brief(p)
+        pos = p.position.upper()
+        if pos in ("DE", "DT", "DL", "NT"):
+            defense_line.append(brief)
+        elif pos in ("LB", "OLB", "ILB", "MLB"):
+            linebackers.append(brief)
+        elif pos in ("CB", "S", "SS", "FS", "DB"):
+            defensive_backs.append(brief)
+        else:
+            # Default: put unknown defensive positions in DL
+            defense_line.append(brief)
+
     return {
         "possession": game.state.possession,
         "offense_team": offense_team.abbreviation,
@@ -367,6 +385,9 @@ def get_personnel(game_id: str):
         "offense_starters": offense_starters,
         "offense_receivers": offense_receivers,
         "defense_players": defense_players,
+        "defense_line": defense_line,
+        "linebackers": linebackers,
+        "defensive_backs": defensive_backs,
         "offense_all": [_player_brief(p) for p in offense_team.roster.all_players()],
         "defense_all": [_player_brief(p) for p in defense_team.roster.all_players()],
     }
