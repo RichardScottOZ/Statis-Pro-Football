@@ -8,7 +8,7 @@ from .fast_action_dice import FastActionDice, DiceResult, PlayTendency
 from .fac_deck import FACDeck, FACCard
 from .player_card import PlayerCard
 from .team import Team
-from .play_resolver import PlayResolver, PlayResult
+from .play_resolver import PlayResolver, PlayResult, BigPlayDefense
 from .solitaire import SolitaireAI, GameSituation, PlayCall
 from .charts import Charts
 from .play_types import (
@@ -137,7 +137,6 @@ class Game:
         # 5E: Manual two-minute offense declaration
         self._two_minute_declared: bool = False
         # 5E: Big play defense state per team
-        from .play_resolver import BigPlayDefense
         self._big_play_defense = {"home": BigPlayDefense(), "away": BigPlayDefense()}
 
         self.state.possession = random.choice(["home", "away"])
@@ -1305,17 +1304,16 @@ class Game:
         Returns True if successfully activated, False otherwise.
         """
         if not hasattr(self, '_big_play_defense'):
-            from .play_resolver import BigPlayDefense
             self._big_play_defense = {"home": BigPlayDefense(), "away": BigPlayDefense()}
 
         bpd = self._big_play_defense.get(team)
         if bpd is None:
             return False
 
-        # Check eligibility (needs 9+ wins)
+        # Check eligibility (needs 9+ wins; default to eligible if wins not set or 0)
         team_obj = self.home_team if team == "home" else self.away_team
-        wins = getattr(team_obj, 'wins', 10)  # Default eligible
-        if not BigPlayDefense.is_eligible(wins):
+        wins = getattr(team_obj, 'wins', 0)
+        if wins > 0 and not BigPlayDefense.is_eligible(wins):
             return False
 
         if bpd._used_this_series:
