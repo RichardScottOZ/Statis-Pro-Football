@@ -136,13 +136,25 @@ class Game:
     def get_defense_team(self) -> Team:
         return self.away_team if self.state.possession == "home" else self.home_team
 
-    def get_qb(self) -> Optional[PlayerCard]:
+    def get_qb(self, player_name: Optional[str] = None) -> Optional[PlayerCard]:
+        if player_name:
+            for p in self.get_offense_team().roster.qbs:
+                if p.player_name == player_name:
+                    return p
         return self.get_offense_team().roster.get_starter("QB")
 
-    def get_rb(self) -> Optional[PlayerCard]:
+    def get_rb(self, player_name: Optional[str] = None) -> Optional[PlayerCard]:
+        if player_name:
+            for p in self.get_offense_team().roster.rbs:
+                if p.player_name == player_name:
+                    return p
         return self.get_offense_team().roster.get_starter("RB")
 
-    def get_wr(self) -> Optional[PlayerCard]:
+    def get_wr(self, player_name: Optional[str] = None) -> Optional[PlayerCard]:
+        if player_name:
+            for p in self.get_offense_team().roster.wrs:
+                if p.player_name == player_name:
+                    return p
         wrs = self.get_offense_team().roster.wrs
         if not wrs:
             return None
@@ -210,20 +222,23 @@ class Game:
                 self.state.score.away += 1
 
     def execute_play(self, play_call: Optional[PlayCall] = None,
-                     defense_formation: Optional[str] = None) -> PlayResult:
+                     defense_formation: Optional[str] = None,
+                     player_name: Optional[str] = None) -> PlayResult:
         """Execute a single play.
 
         Args:
             play_call: Optional human-specified offensive play call.
             defense_formation: Optional human-specified defensive formation.
+            player_name: Optional specific player to use for the play.
                 If provided, overrides the AI defense call.
         """
         if self.use_5e:
-            return self._execute_play_5e(play_call, defense_formation)
-        return self._execute_play_legacy(play_call, defense_formation)
+            return self._execute_play_5e(play_call, defense_formation, player_name=player_name)
+        return self._execute_play_legacy(play_call, defense_formation, player_name=player_name)
 
     def _execute_play_legacy(self, play_call: Optional[PlayCall] = None,
-                             defense_formation: Optional[str] = None) -> PlayResult:
+                             defense_formation: Optional[str] = None,
+                             player_name: Optional[str] = None) -> PlayResult:
         """Execute a single play using legacy dice system."""
         dice = self.dice.roll()
         situation = self.state.to_situation()
@@ -373,8 +388,14 @@ class Game:
             description=f"Pass {'complete' if yards > 0 else 'incomplete'} for {yards} yards",
         )
 
-    def _pick_receiver(self, play_call: PlayCall) -> Optional[PlayerCard]:
+    def _pick_receiver(self, play_call: PlayCall, player_name: Optional[str] = None) -> Optional[PlayerCard]:
         team = self.get_offense_team()
+
+        # If specific player requested, try to find them
+        if player_name:
+            for p in team.roster.wrs + team.roster.tes:
+                if p.player_name == player_name:
+                    return p
 
         if "DEEP" in play_call.direction:
             receivers = team.roster.wrs
@@ -535,7 +556,8 @@ class Game:
 
     def _execute_play_5e(self, play_call: Optional[PlayCall] = None,
                         defense_formation: Optional[str] = None,
-                        defensive_strategy: Optional[str] = None) -> PlayResult:
+                        defensive_strategy: Optional[str] = None,
+                        player_name: Optional[str] = None) -> PlayResult:
         """Execute a single play using 5th-edition FAC deck."""
         fac_card = self.deck.draw()
         situation = self.state.to_situation()
@@ -596,7 +618,7 @@ class Game:
         # ── Strategy handling ─────────────────────────────────────────
         strategy = getattr(play_call, 'strategy', None)
         if strategy == "FLOP":
-            qb = self.get_qb()
+            qb = self.get_qb(player_name)
             if qb:
                 result = self.resolver.resolve_flop(qb)
                 self.state.play_log.append(f"  → {result.description}")
@@ -604,7 +626,7 @@ class Game:
                 self._advance_time(self.TIME_STANDARD_PLAY)
                 return result
         elif strategy == "SNEAK":
-            qb = self.get_qb()
+            qb = self.get_qb(player_name)
             if qb:
                 result = self.resolver.resolve_sneak(qb, self.deck)
                 self.state.play_log.append(f"  → {result.description}")
@@ -612,7 +634,7 @@ class Game:
                 self._advance_time(self.TIME_STANDARD_PLAY)
                 return result
         elif strategy == "DRAW":
-            rb = self.get_rb()
+            rb = self.get_rb(player_name)
             def_form = defense_formation or self.ai.call_defense_5e(situation, fac_card)
             defense = self.get_defense_team()
             if rb:
@@ -671,13 +693,13 @@ class Game:
             result = PlayResult("KNEEL", -1, "KNEEL", description="QB kneels")
             self._advance_down(-1)
         elif play_call.play_type == "RUN":
-            result = self._execute_run_5e(fac_card, play_call, defense_formation)
+            result = self._execute_run_5e(fac_card, play_call, defense_formation, player_name)
         elif play_call.play_type == "SCREEN":
             result = self._execute_screen_5e(fac_card, defense_formation)
         elif play_call.play_type in ("LONG_PASS", "QUICK_PASS"):
-            result = self._execute_pass_5e(fac_card, play_call, defense_formation, defensive_strategy)
+            result = self._execute_pass_5e(fac_card, play_call, defense_formation, defensive_strategy, player_name)
         else:
-            result = self._execute_pass_5e(fac_card, play_call, defense_formation, defensive_strategy)
+            result = self._execute_pass_5e(fac_card, play_call, defense_formation, defensive_strategy, player_name)
 
         self.state.play_log.append(f"  → {result.description}")
 
@@ -766,8 +788,9 @@ class Game:
         return result
 
     def _execute_run_5e(self, fac_card: FACCard, play_call: PlayCall,
-                        defense_formation: Optional[str] = None) -> PlayResult:
-        rb = self.get_rb()
+                        defense_formation: Optional[str] = None,
+                        player_name: Optional[str] = None) -> PlayResult:
+        rb = self.get_rb(player_name)
         defense = self.get_defense_team()
         def_run_stop = defense.defense_rating
         situation = self.state.to_situation()
@@ -818,9 +841,10 @@ class Game:
 
     def _execute_pass_5e(self, fac_card: FACCard, play_call: PlayCall,
                          defense_formation: Optional[str] = None,
-                         defensive_strategy: Optional[str] = None) -> PlayResult:
-        qb = self.get_qb()
-        receiver = self._pick_receiver(play_call)
+                         defensive_strategy: Optional[str] = None,
+                         player_name: Optional[str] = None) -> PlayResult:
+        qb = self.get_qb(player_name)
+        receiver = self._pick_receiver(play_call, player_name)
         receivers = self._get_all_receivers()
         defense = self.get_defense_team()
         situation = self.state.to_situation()

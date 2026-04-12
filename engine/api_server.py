@@ -189,7 +189,10 @@ def execute_human_play(game_id: str, request: HumanPlayCallRequest):
         strategy=request.strategy.upper() if request.strategy else None,
     )
 
-    result = game.execute_play(play_call=play_call)
+    result = game.execute_play(
+        play_call=play_call,
+        player_name=request.player_name
+    )
 
     return {
         "game_id": game_id,
