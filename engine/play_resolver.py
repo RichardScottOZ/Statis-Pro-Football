@@ -1164,7 +1164,8 @@ class PlayResolver:
                         defensive_strategy: str = "NONE",
                         defenders: Optional[List[PlayerCard]] = None,
                         two_minute_offense: bool = False,
-                        completion_modifier: int = 0) -> PlayResult:
+                        completion_modifier: int = 0,
+                        defensive_play_5e=None) -> PlayResult:
         """Resolve a pass play using 5th-edition FAC card mechanics.
 
         Parameters
@@ -1190,6 +1191,9 @@ class PlayResolver:
         completion_modifier : int
             Additional modifier to QB completion range (e.g. from play-action).
             Positive = wider COM range (more completions), negative = narrower.
+        defensive_play_5e : Optional[DefensivePlay]
+            The 5E defensive play call. When provided, uses proper
+            get_completion_modifier_5e() for completion range modifiers.
         """
         # ── Handle Z card ────────────────────────────────────────────
         if fac_card.is_z_card:
@@ -1200,14 +1204,14 @@ class PlayResolver:
                 fac_card, deck, qb, receiver, receivers, pass_type,
                 defense_coverage, defense_pass_rush, defense_formation,
                 is_blitz_tendency, z_event, defensive_strategy, defenders,
-                two_minute_offense, completion_modifier,
+                two_minute_offense, completion_modifier, defensive_play_5e,
             )
 
         return self._resolve_pass_inner_5e(
             fac_card, deck, qb, receiver, receivers, pass_type,
             defense_coverage, defense_pass_rush, defense_formation,
             is_blitz_tendency, None, defensive_strategy, defenders,
-            two_minute_offense, completion_modifier,
+            two_minute_offense, completion_modifier, defensive_play_5e,
         )
 
     def _resolve_pass_inner_5e(self, fac_card: FACCard, deck: FACDeck,
@@ -1222,7 +1226,8 @@ class PlayResolver:
                                defensive_strategy: str = "NONE",
                                defenders: Optional[List[PlayerCard]] = None,
                                two_minute_offense: bool = False,
-                               completion_modifier: int = 0) -> PlayResult:
+                               completion_modifier: int = 0,
+                               defensive_play_5e=None) -> PlayResult:
         """Inner pass resolution after Z-card handling.
 
         Authentic 5E resolution:
@@ -1348,6 +1353,7 @@ class PlayResolver:
                 fac_card, qb, receiver, z_event,
                 receivers=receivers,
                 defense_formation=defense_formation,
+                defensive_play_5e=defensive_play_5e,
             )
             r.debug_log = log
             return r
@@ -1386,10 +1392,21 @@ class PlayResolver:
         if two_minute_offense and pass_type != "SCREEN":
             strategy_modifier -= 4
 
+        # Apply 5E Defense/Pass Table completion modifier from defensive play call.
+        # This is the core modifier: Pass Defense lowers completion range,
+        # Run Defense makes passing easier, etc.
+        defense_play_comp_mod = 0
+        if defensive_play_5e is not None:
+            from .play_types import get_completion_modifier_5e
+            defense_play_comp_mod = get_completion_modifier_5e(defensive_play_5e, pass_type)
+            if defense_play_comp_mod != 0:
+                log.append(f"[QB CARD] 5E Defense/Pass modifier: {defense_play_comp_mod:+d} (play={defensive_play_5e}, type={pass_type})")
+
         # Apply completion_modifier (e.g. from play-action strategy).
         # Positive = wider COM range = subtract from PN (more likely to complete).
         # Negative = narrower COM range = add to PN (less likely to complete).
-        completion_adjustment = -completion_modifier  # +5 completion → -5 to PN
+        total_completion_mod = completion_modifier + defense_play_comp_mod
+        completion_adjustment = -total_completion_mod  # +5 completion → -5 to PN
 
         # Coverage penalties (double/triple/two-minute) are always <= 0.
         # Negative strategy_modifier → increase PN (harder to complete).
@@ -1397,8 +1414,8 @@ class PlayResolver:
 
         total_pn_adjustment = completion_adjustment + coverage_penalty
         
-        if strategy_modifier != 0 or completion_modifier != 0:
-            log.append(f"[QB CARD] Strategy modifier={strategy_modifier}, completion modifier={completion_modifier}")
+        if strategy_modifier != 0 or total_completion_mod != 0:
+            log.append(f"[QB CARD] Strategy modifier={strategy_modifier}, completion modifier={total_completion_mod}")
         if total_pn_adjustment != 0:
             old_pn = pn
             pn = max(1, min(48, pn + total_pn_adjustment))
@@ -1655,7 +1672,8 @@ class PlayResolver:
                            receiver: PlayerCard,
                            z_event: Optional[Dict[str, Any]],
                            receivers: Optional[List[PlayerCard]] = None,
-                           defense_formation: str = "4_3") -> PlayResult:
+                           defense_formation: str = "4_3",
+                           defensive_play_5e=None) -> PlayResult:
         """Resolve a screen pass using the FAC card's SC field.
 
         Rule 4: Screen passes must go to a back (RB). If the receiver is a
@@ -1696,7 +1714,11 @@ class PlayResolver:
         # Screen complete — Rule 4: use RB's rushing N column for yards
         run_num = fac_card.run_num_int or random.randint(1, 12)
         # Apply defense run number modifiers for screen
-        rn_modifier = self.get_run_number_modifier(defense_formation)
+        if defensive_play_5e is not None:
+            from .play_types import get_run_number_modifier_5e
+            rn_modifier = get_run_number_modifier_5e(defensive_play_5e, ball_carrier_number=1)
+        else:
+            rn_modifier = self.get_run_number_modifier(defense_formation)
         run_num = max(1, min(12, run_num + rn_modifier))
 
         if actual_receiver.has_rushing():
@@ -1757,12 +1779,13 @@ class PlayResolver:
                        play_direction: str = "IL",
                        defense_run_stop: int = 0,
                        defense_formation: str = "4_3",
-                       extra_rn_modifier: int = 0) -> PlayResult:
+                       extra_rn_modifier: int = 0,
+                       defensive_play_5e=None) -> PlayResult:
         """Resolve a run play using 5th-edition FAC card mechanics.
 
         Authentic resolution:
           1. Draw FAC → get RUN NUMBER (1-12)
-          2. Apply Run Number modifiers (defense formation + extra)
+          2. Apply Run Number modifiers (defense play + extra)
           3. Look up rusher's Rushing column row → N/SG/LG values
           4. Use N (Normal) column as base yards
           5. Modify by blocking matchups
@@ -1781,6 +1804,10 @@ class PlayResolver:
         extra_rn_modifier : int
             Additional Run Number modifier (e.g. from Draw strategy).
             Positive = worse for offense (higher RN), negative = better.
+        defensive_play_5e : Optional[DefensivePlay]
+            The 5E defensive play call. When provided, uses proper
+            get_run_number_modifier_5e() for RN modifier (+4 key on BC,
+            +2 no key, 0 wrong key/pass/prevent/blitz).
         """
         z_event = None
 
@@ -1793,8 +1820,13 @@ class PlayResolver:
         run_num = fac_card.run_num_int
         is_oob = fac_card.is_out_of_bounds
 
-        # Rule 1: Apply run number modifier based on defense formation + extra
-        rn_modifier = self.get_run_number_modifier(defense_formation) + extra_rn_modifier
+        # Rule 1: Apply run number modifier based on defensive play + extra
+        if defensive_play_5e is not None:
+            from .play_types import get_run_number_modifier_5e
+            # TODO: ball_carrier_number should come from play call context
+            rn_modifier = get_run_number_modifier_5e(defensive_play_5e, ball_carrier_number=1) + extra_rn_modifier
+        else:
+            rn_modifier = self.get_run_number_modifier(defense_formation) + extra_rn_modifier
         if run_num is not None:
             run_num = max(1, min(12, run_num + rn_modifier))
 
