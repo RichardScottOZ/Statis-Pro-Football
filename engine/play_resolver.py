@@ -463,7 +463,7 @@ class PlayResolver:
           "OTHER"       — unrecognised pattern
         """
         m = matchup.strip()
-        if m.upper() in ("BREAK", "Break"):
+        if m.upper() == "BREAK":
             return "BREAK"
         if " vs " in m:
             if m.startswith("BK"):
@@ -747,7 +747,9 @@ class PlayResolver:
             yards = play_data.get("yards", 0)
             is_td = play_data.get("td", False)
 
-        # Defense run-stop modifier (no artificial floor/clamping)
+        # Defense run-stop modifier: yards = base − TV (no artificial floor/clamping).
+        # Per 5E rules the tackle rating is applied directly; empty-box rules are
+        # handled in resolve_run_5e() which has full matchup context.
         if result_type in ("GAIN", "OOB"):
             yards = int(yards - eff_run_stop)
 
