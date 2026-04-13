@@ -152,6 +152,10 @@ class PlayResolver:
     PUNT_RETURN_REC_DIVISOR = 5.0
     KICK_RETURN_REC_DIVISOR = 6.0
 
+    # Yard-line threshold for "within 20 of the defense's goal"
+    # on the 0–100 scale (0 = own goal, 100 = opponent's goal).
+    WITHIN_20_YARD_LINE = 80
+
     def __init__(self):
         self.charts = Charts()
         # Track endurance: {player_name: consecutive_plays_directed}
@@ -1268,10 +1272,11 @@ class PlayResolver:
         # ── Step 1: Check receiver target for P.Rush ─────────────────
         target_field = fac_card.get_receiver_target(pass_type)
         log.append(f"[TARGET] FAC {pass_type} target field = '{target_field}'")
-        if force_pass_rush:
-            log.append(f"[P.RUSH] Pass rush FORCED by Blitz defense vs {pass_type} pass (overrides FAC target)")
-        if target_field == "P.Rush" or force_pass_rush:
-            log.append("[P.RUSH] Pass rush triggered by FAC card")
+        if force_pass_rush or target_field == "P.Rush":
+            if force_pass_rush:
+                log.append(f"[P.RUSH] Pass rush FORCED by Blitz defense vs {pass_type} pass (overrides FAC target)")
+            else:
+                log.append("[P.RUSH] Pass rush triggered by FAC card")
             # Pass rush result → check QB's pass_rush ranges
             if qb.pass_rush:
                 pn = fac_card.pass_num_int or random.randint(1, 48)
@@ -1421,7 +1426,7 @@ class PlayResolver:
         defense_play_comp_mod = 0
         if defensive_play_5e is not None:
             from .play_types import get_completion_modifier_5e
-            is_within_20 = yard_line >= 80
+            is_within_20 = yard_line >= self.WITHIN_20_YARD_LINE
             defense_play_comp_mod = get_completion_modifier_5e(defensive_play_5e, pass_type, within_20=is_within_20)
             if defense_play_comp_mod != 0:
                 w20_tag = " [within-20]" if is_within_20 else ""
