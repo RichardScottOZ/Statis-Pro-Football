@@ -187,50 +187,92 @@ def get_run_number_modifier_5e(defensive_play: DefensivePlay,
     return 0  # Wrong key
 
 
+def should_force_pass_rush(defensive_play: DefensivePlay,
+                           pass_type: str) -> bool:
+    """Return True if this defense/pass combination always triggers Pass Rush.
+
+    Per the 5E Defense/Pass Table:
+      Blitz vs Short pass → P.Rush (always)
+      Blitz vs Long pass  → P.Rush (always)
+    """
+    return (defensive_play == DefensivePlay.BLITZ
+            and pass_type in ("SHORT", "LONG"))
+
+
 def get_completion_modifier_5e(defensive_play: DefensivePlay,
-                                pass_type: str) -> int:
+                                pass_type: str,
+                                within_20: bool = False) -> int:
     """Return completion range modifier based on defensive play and pass type.
 
-    5E Defense/Pass Table values:
-                    Quick  Short  Long
-    Run Defense:      0     +5     +7
-    Pass Defense:   -10      0      0
-    Prevent:        -10     -5     -7
-    Blitz:            0     -5    P.Rush
+    5E Defense/Pass Table (from rules PDF page 5):
+
+                     Quick    Short   Long
+    Run Defense:      0(-10)  +5(0)   +7
+    Pass Defense:   -10(-15)  -5       0
+    Prevent Def:      0       -5      -7
+    Blitz Def:      +10      P.Rush  P.Rush
+
+    Values in parentheses apply when scrimmage line is within 20 yards
+    of the defense's goal line.  Blitz vs Short/Long always triggers
+    Pass Rush (see ``should_force_pass_rush``); this function returns 0
+    for those cells — the caller must check ``should_force_pass_rush``
+    first and bypass completion-range logic entirely.
+
+    Screen pass modifiers are Run Number modifiers, not completion
+    modifiers — see ``get_screen_rn_modifier_5e``.
     """
     if defensive_play == DefensivePlay.BLITZ:
         if pass_type == "QUICK":
-            return 0
-        elif pass_type == "SHORT":
-            return -5
-        else:  # LONG - triggers pass rush
-            return 0  # Special: pass rush instead
+            return 10
+        # SHORT / LONG → pass rush; return 0 as placeholder
+        return 0
 
     if is_run_defense(defensive_play):
         if pass_type == "QUICK":
-            return 0
+            return -10 if within_20 else 0
         elif pass_type == "SHORT":
-            return 5
+            return 0 if within_20 else 5
         else:  # LONG
             return 7
 
     if defensive_play == DefensivePlay.PASS_DEFENSE:
         if pass_type == "QUICK":
-            return -10
+            return -15 if within_20 else -10
         elif pass_type == "SHORT":
-            return 0
+            return -5
         else:  # LONG
             return 0
 
     if defensive_play == DefensivePlay.PREVENT_DEFENSE:
         if pass_type == "QUICK":
-            return -10
+            return 0
         elif pass_type == "SHORT":
             return -5
         else:  # LONG
             return -7
 
     return 0
+
+
+def get_screen_rn_modifier_5e(defensive_play: DefensivePlay,
+                               ball_carrier_number: int = 1) -> int:
+    """Return Run Number modifier for a completed screen pass.
+
+    5E Defense/Pass Table — Screen row:
+      Run Def:     0 / +2 / +4  (wrong key / no key / keyed on BC)
+      Pass Def:    0
+      Prevent Def: -2
+      Blitz Def:   -4
+
+    Negative values favour the offence (lower RN = more yards).
+    """
+    if is_run_defense(defensive_play):
+        return get_run_number_modifier_5e(defensive_play, ball_carrier_number)
+    if defensive_play == DefensivePlay.PREVENT_DEFENSE:
+        return -2
+    if defensive_play == DefensivePlay.BLITZ:
+        return -4
+    return 0  # Pass Defense
 
 
 # Map old formation strings to new defensive play (for backward compatibility)

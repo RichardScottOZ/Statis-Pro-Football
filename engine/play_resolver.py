@@ -152,6 +152,10 @@ class PlayResolver:
     PUNT_RETURN_REC_DIVISOR = 5.0
     KICK_RETURN_REC_DIVISOR = 6.0
 
+    # Yard-line threshold for "within 20 of the defense's goal"
+    # on the 0–100 scale (0 = own goal, 100 = opponent's goal).
+    WITHIN_20_YARD_LINE = 80
+
     def __init__(self):
         self.charts = Charts()
         # Track endurance: {player_name: consecutive_plays_directed}
@@ -367,7 +371,9 @@ class PlayResolver:
                             defense_coverage: int = 0,
                             defense_pass_rush: int = 0,
                             defensive_strategy: str = "NONE",
-                            defenders: Optional[List[PlayerCard]] = None) -> PlayResult:
+                            defenders: Optional[List[PlayerCard]] = None,
+                            defensive_play_5e=None,
+                            yard_line: int = 25) -> PlayResult:
         """Resolve a Play-Action pass strategy.
 
         5E Rules: Short/Long pass only.
@@ -405,6 +411,8 @@ class PlayResolver:
             defenders=defenders,
             two_minute_offense=False,
             completion_modifier=pa_mod,
+            defensive_play_5e=defensive_play_5e,
+            yard_line=yard_line,
         )
         result.strategy = "PLAY_ACTION"
         result.description += f" (Play-action, completion modifier {pa_mod:+d})"
@@ -1165,7 +1173,8 @@ class PlayResolver:
                         defenders: Optional[List[PlayerCard]] = None,
                         two_minute_offense: bool = False,
                         completion_modifier: int = 0,
-                        defensive_play_5e=None) -> PlayResult:
+                        defensive_play_5e=None,
+                        yard_line: int = 25) -> PlayResult:
         """Resolve a pass play using 5th-edition FAC card mechanics.
 
         Parameters
@@ -1194,6 +1203,9 @@ class PlayResolver:
         defensive_play_5e : Optional[DefensivePlay]
             The 5E defensive play call. When provided, uses proper
             get_completion_modifier_5e() for completion range modifiers.
+        yard_line : int
+            Offensive team's field position (0 = own goal, 100 = opponent's
+            goal).  Used for within-20 completion modifiers.
         """
         # ── Handle Z card ────────────────────────────────────────────
         if fac_card.is_z_card:
@@ -1205,6 +1217,7 @@ class PlayResolver:
                 defense_coverage, defense_pass_rush, defense_formation,
                 is_blitz_tendency, z_event, defensive_strategy, defenders,
                 two_minute_offense, completion_modifier, defensive_play_5e,
+                yard_line,
             )
 
         return self._resolve_pass_inner_5e(
@@ -1212,6 +1225,7 @@ class PlayResolver:
             defense_coverage, defense_pass_rush, defense_formation,
             is_blitz_tendency, None, defensive_strategy, defenders,
             two_minute_offense, completion_modifier, defensive_play_5e,
+            yard_line,
         )
 
     def _resolve_pass_inner_5e(self, fac_card: FACCard, deck: FACDeck,
@@ -1227,30 +1241,42 @@ class PlayResolver:
                                defenders: Optional[List[PlayerCard]] = None,
                                two_minute_offense: bool = False,
                                completion_modifier: int = 0,
-                               defensive_play_5e=None) -> PlayResult:
+                               defensive_play_5e=None,
+                               yard_line: int = 25) -> PlayResult:
         """Inner pass resolution after Z-card handling.
 
         Authentic 5E resolution:
-          1. Check QK/SH/LG receiver target field on FAC card
-          2. If "P.Rush" → check QB pass rush ranges for sack/scramble/INC/COM
-          3. Screen passes use FAC SC field directly
-          4. PN → QB card passing ranges → COM / INC / INT
-          5. If COM → RUN NUMBER → receiver's pass-gain Q/S/L → yards
+          1. If Blitz vs Short/Long → always trigger Pass Rush
+          2. Check QK/SH/LG receiver target field on FAC card
+          3. If "P.Rush" → check QB pass rush ranges for sack/scramble/INC/COM
+          4. Screen passes use FAC SC field directly
+          5. PN → QB card passing ranges → COM / INC / INT
+          6. If COM → RUN NUMBER → receiver's pass-gain Q/S/L → yards
 
         NOTE: The ER (End Run) field is for run plays only; it does NOT
         cause sacks on pass plays.  Pass-play sacks come exclusively
-        from the "P.Rush" code in the QK/SH/LG receiver-target field.
+        from the "P.Rush" code in the QK/SH/LG receiver-target field,
+        or from Blitz defense forcing Pass Rush on Short/Long passes.
         """
         log: List[str] = []
         log.append(f"[FAC] Card #{fac_card.card_number}: RN={fac_card.run_number} PN={fac_card.pass_number} ER={fac_card.end_run}")
         log.append(f"[PASS] Type={pass_type}, QB={qb.player_name}, Target={receiver.player_name}")
         log.append(f"[DEF] Formation={defense_formation}, Coverage={defense_coverage}, PassRush={defense_pass_rush}, Strategy={defensive_strategy}")
 
+        # ── Step 0: Blitz always forces Pass Rush on Short/Long ──────
+        force_pass_rush = False
+        if defensive_play_5e is not None:
+            from .play_types import should_force_pass_rush
+            force_pass_rush = should_force_pass_rush(defensive_play_5e, pass_type)
+
         # ── Step 1: Check receiver target for P.Rush ─────────────────
         target_field = fac_card.get_receiver_target(pass_type)
         log.append(f"[TARGET] FAC {pass_type} target field = '{target_field}'")
-        if target_field == "P.Rush":
-            log.append("[P.RUSH] Pass rush triggered by FAC card")
+        if force_pass_rush or target_field == "P.Rush":
+            if force_pass_rush:
+                log.append(f"[P.RUSH] Pass rush FORCED by Blitz defense vs {pass_type} pass (overrides FAC target)")
+            else:
+                log.append("[P.RUSH] Pass rush triggered by FAC card")
             # Pass rush result → check QB's pass_rush ranges
             if qb.pass_rush:
                 pn = fac_card.pass_num_int or random.randint(1, 48)
@@ -1395,12 +1421,16 @@ class PlayResolver:
         # Apply 5E Defense/Pass Table completion modifier from defensive play call.
         # This is the core modifier: Pass Defense lowers completion range,
         # Run Defense makes passing easier, etc.
+        # Within-20 modifiers apply when scrimmage line is within 20 of
+        # the defense's goal (i.e. yard_line >= 80 on our 0-100 scale).
         defense_play_comp_mod = 0
         if defensive_play_5e is not None:
             from .play_types import get_completion_modifier_5e
-            defense_play_comp_mod = get_completion_modifier_5e(defensive_play_5e, pass_type)
+            is_within_20 = yard_line >= self.WITHIN_20_YARD_LINE
+            defense_play_comp_mod = get_completion_modifier_5e(defensive_play_5e, pass_type, within_20=is_within_20)
             if defense_play_comp_mod != 0:
-                log.append(f"[QB CARD] 5E Defense/Pass modifier: {defense_play_comp_mod:+d} (play={defensive_play_5e}, type={pass_type})")
+                w20_tag = " [within-20]" if is_within_20 else ""
+                log.append(f"[QB CARD] 5E Defense/Pass modifier: {defense_play_comp_mod:+d} (play={defensive_play_5e}, type={pass_type}){w20_tag}")
 
         # Apply completion_modifier (e.g. from play-action strategy).
         # Positive = wider COM range = subtract from PN (more likely to complete).
@@ -1713,10 +1743,10 @@ class PlayResolver:
 
         # Screen complete — Rule 4: use RB's rushing N column for yards
         run_num = fac_card.run_num_int or random.randint(1, 12)
-        # Apply defense run number modifiers for screen
+        # Apply defense run number modifiers for screen (from Defense/Pass Table)
         if defensive_play_5e is not None:
-            from .play_types import get_run_number_modifier_5e
-            rn_modifier = get_run_number_modifier_5e(defensive_play_5e, ball_carrier_number=1)
+            from .play_types import get_screen_rn_modifier_5e
+            rn_modifier = get_screen_rn_modifier_5e(defensive_play_5e, ball_carrier_number=1)
         else:
             rn_modifier = self.get_run_number_modifier(defense_formation)
         run_num = max(1, min(12, run_num + rn_modifier))
@@ -2509,11 +2539,17 @@ class PlayResolver:
         # Run defense formations
         return 2
 
-    # ── Rule 14: Within-20 Completion Modifier ───────────────────────
+    # ── Rule 14: Within-20 Completion Modifier (legacy) ────────────────
 
     @staticmethod
     def get_within_20_completion_modifier(yard_line: int) -> int:
         """Return completion range modifier when inside opponent's 20 (Rule 14).
+
+        .. deprecated::
+            Superseded by ``get_completion_modifier_5e(within_20=True)`` in
+            play_types.py which provides per-defense/per-pass-type within-20
+            modifiers matching the 5E rules PDF table.  Kept for backward
+            compatibility with legacy tests.
 
         5E Rule: When inside the 20, Long passes have their completion
         range reduced by -5 (compressed field).

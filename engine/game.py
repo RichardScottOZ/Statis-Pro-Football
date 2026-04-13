@@ -899,6 +899,8 @@ class Game:
                     defense_pass_rush=defense.defense_rating,
                     defensive_strategy=defensive_strategy or "NONE",
                     defenders=defenders,
+                    defensive_play_5e=def_play_5e,
+                    yard_line=self.state.yard_line,
                 )
                 self._apply_current_personnel_note(result)
                 self.state.play_log.append(f"  → {result.description}")
@@ -1097,6 +1099,7 @@ class Game:
                 pass_type="SCREEN",
                 defense_formation=def_formation,
                 defensive_play_5e=defensive_play_5e,
+                yard_line=self.state.yard_line,
             )
             result.defense_formation = def_formation
             return result
@@ -1149,6 +1152,7 @@ class Game:
                 defenders=defenders,
                 two_minute_offense=self._is_two_minute_offense(),
                 defensive_play_5e=defensive_play_5e,
+                yard_line=self.state.yard_line,
             )
             result.defense_formation = def_formation
             return result

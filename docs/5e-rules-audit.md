@@ -116,10 +116,15 @@ This document maps every rule from the 5th Edition Rules PDF to its implementati
 
 ## DEFENSE/PASS TABLE (Page 5)
 
-- [x] **Defense Modifiers to Completion Range**: Quick/Short/Long vs Run/Pass/Prevent/Blitz — `engine/play_types.py:get_completion_modifier_5e()` provides exact 5E table values; now threaded through `resolve_pass_5e()` via `defensive_play_5e` parameter
-- [x] **Exact 5E Table Values**: Quick: 0/-10/-10/0/+10; Short: +5/0/-5/-5/PR; Long: +7/0/0/-7/PR — `get_completion_modifier_5e()` returns exact values; applied to PN before QB card check
-- [x] **Within-20 Modified Values**: Quick: -10/-15; Short: 0; Long: unchanged — `engine/play_resolver.py:get_within_20_completion_modifier()` returns -5 for Long passes inside opponent's 20
-- [x] **Screen Pass Run Number Modifiers**: Key on back +4, no key +2, wrong key 0 — `_resolve_screen_5e()` uses `get_run_number_modifier_5e()` via `defensive_play_5e` parameter
+- [x] **Defense Modifiers to Completion Range**: Quick/Short/Long vs Run/Pass/Prevent/Blitz — `engine/play_types.py:get_completion_modifier_5e()` provides exact 5E table values (OCR-verified); threaded through `resolve_pass_5e()` via `defensive_play_5e` parameter
+- [x] **Exact 5E Table Values** (OCR'd from rules PDF page 5):
+  - Run Def:     Quick 0 / Short +5 / Long +7 / Screen 0/+2/+4*
+  - Pass Def:    Quick -10 / Short -5 / Long 0 / Screen 0
+  - Prevent Def: Quick 0 / Short -5 / Long -7 / Screen -2 (RN mod)
+  - Blitz Def:   Quick +10 / Short P.Rush / Long P.Rush / Screen -4 (RN mod)
+- [x] **Blitz Forces Pass Rush**: Blitz vs Short or Long pass ALWAYS triggers Pass Rush procedure — `play_types.py:should_force_pass_rush()` returns True; `_resolve_pass_inner_5e()` checks before FAC target field
+- [x] **Within-20 Modified Values** (parenthetical from rules table): Run Def/Quick: -10, Pass Def/Quick: -15, Run Def/Short: 0 — `get_completion_modifier_5e(within_20=True)` returns correct values; `yard_line` threaded from game.py
+- [x] **Screen Pass Run Number Modifiers**: Run Def uses key logic (0/+2/+4), Pass Def 0, Prevent -2, Blitz -4 — `play_types.py:get_screen_rn_modifier_5e()` with `_resolve_screen_5e()`
 
 ---
 
