@@ -357,13 +357,21 @@ class TestTwoStagePassResolution:
         # At least some sacks should happen with very high pass rush
         assert sack_count > 5
 
-    def test_high_coverage_reduces_yards(self):
-        """High coverage should reduce yards on completions."""
+    def test_coverage_does_not_reduce_completion_yards(self):
+        """In 5E, defense affects PN (pass number), not reception yards.
+
+        High coverage values should NOT reduce yards after a completion.
+        The pass_defense_rating of the covering defender modifies PN before
+        the QB card check, which can turn completions into incompletions,
+        but once a pass is complete the receiver card yards are used as-is.
+        """
         random.seed(456)
         qb = self._make_qb("A")
         wr = self._make_wr("A")
         normal_yards = []
         covered_yards = []
+
+        random.seed(789)
         for _ in range(200):
             dice = self.dice.roll()
             result = self.resolver.resolve_pass(dice, qb, wr, "SHORT",
@@ -371,7 +379,7 @@ class TestTwoStagePassResolution:
             if result.result in ("COMPLETE", "TD"):
                 normal_yards.append(result.yards_gained)
 
-        random.seed(456)
+        random.seed(789)
         for _ in range(200):
             dice = self.dice.roll()
             result = self.resolver.resolve_pass(dice, qb, wr, "SHORT",
@@ -379,11 +387,10 @@ class TestTwoStagePassResolution:
             if result.result in ("COMPLETE", "TD"):
                 covered_yards.append(result.yards_gained)
 
-        if normal_yards and covered_yards:
-            avg_normal = sum(normal_yards) / len(normal_yards)
-            avg_covered = sum(covered_yards) / len(covered_yards)
-            # High coverage should result in fewer or lower yards
-            assert avg_covered <= avg_normal or len(covered_yards) <= len(normal_yards)
+        # With the same seed, completions should have the same yards
+        # regardless of defense_coverage (coverage affects PN, not yards)
+        assert len(normal_yards) == len(covered_yards)
+        assert normal_yards == covered_yards
 
 
 # ─── OOB and Clock ──────────────────────────────────────────────────
