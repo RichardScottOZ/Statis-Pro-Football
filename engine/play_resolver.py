@@ -449,6 +449,35 @@ class PlayResolver:
             return -effective_tv  # Defense wins: subtract TV
         return 0  # Tied: no modification
 
+    @staticmethod
+    def classify_blocking_matchup(matchup: str) -> str:
+        """Classify a FAC blocking matchup string into a matchup type.
+
+        Returns one of:
+          "BK_VS_BOX"   — "BK vs F" style: blocking back vs. defensive box
+          "OL_VS_BOX"   — "CN vs C" / "LG vs B" style: OL vs. defensive box
+          "TWO_DEF_BOX" — "A + F" / "B + G" style: two single-letter defense boxes
+          "TWO_OL"      — "LG + LT" / "CN + LG" style: two offensive players
+          "OL_ONLY"     — "LG" / "CN" / "BK" / "LT" etc.: single OL, no specific box
+          "BREAK"       — breakaway run
+          "OTHER"       — unrecognised pattern
+        """
+        m = matchup.strip()
+        if m.upper() in ("BREAK", "Break"):
+            return "BREAK"
+        if " vs " in m:
+            if m.startswith("BK"):
+                return "BK_VS_BOX"
+            return "OL_VS_BOX"
+        if " + " in m:
+            parts = [p.strip() for p in m.split(" + ")]
+            if len(parts) == 2:
+                # Single uppercase letter = defensive box (A-J)
+                if all(len(p) == 1 and p.isupper() for p in parts):
+                    return "TWO_DEF_BOX"
+                return "TWO_OL"
+        return "OL_ONLY"
+
     # ── Onside kick ──────────────────────────────────────────────────
 
     def resolve_onside_kick(self, deck: FACDeck,
@@ -1804,7 +1833,10 @@ class PlayResolver:
                        defense_run_stop: int = 0,
                        defense_formation: str = "4_3",
                        extra_rn_modifier: int = 0,
-                       defensive_play_5e=None) -> PlayResult:
+                       defensive_play_5e=None,
+                       box_is_empty: bool = False,
+                       both_boxes_empty: bool = False,
+                       blocking_back_bv: int = 0) -> PlayResult:
         """Resolve a run play using 5th-edition FAC card mechanics.
 
         Authentic resolution:
@@ -1812,7 +1844,11 @@ class PlayResolver:
           2. Apply Run Number modifiers (defense play + extra)
           3. Look up rusher's Rushing column row → N/SG/LG values
           4. Use N (Normal) column as base yards
-          5. Modify by blocking matchups
+          5. Modify by blocking matchup per empty-box rules:
+             - "BK vs Box" + empty box  → add blocking_back_bv (BK rating)
+             - "OL vs Box" + empty box  → base yards + 2
+             - "Box + Box" + both empty → base yards + 2
+             - otherwise               → base yards − defender's TV (eff_run_stop)
 
         Parameters
         ----------
@@ -1832,6 +1868,15 @@ class PlayResolver:
             The 5E defensive play call. When provided, uses proper
             get_run_number_modifier_5e() for RN modifier (+4 key on BC,
             +2 no key, 0 wrong key/pass/prevent/blitz).
+        box_is_empty : bool
+            True when the specific defensive box named in the FAC matchup
+            has no defender assigned (empty box rule).
+        both_boxes_empty : bool
+            True when the FAC matchup is "Box + Box" and BOTH boxes are
+            unoccupied (two-box empty rule: +2 yards).
+        blocking_back_bv : int
+            Blocking value of the BK for "BK vs Box" matchups.  Only used
+            when box_is_empty is True.
         """
         z_event = None
         log: List[str] = []
@@ -1933,13 +1978,30 @@ class PlayResolver:
                         yards = random.randint(1, 5)
 
             base_yards = yards
-            # Defense run-stop modifier (authentic 5E: tackle rating from
-            # blocking matchup on FAC card — no artificial floor/clamping)
-            yards = int(yards - eff_run_stop)
-            log.append(
-                f"[YARDS] Base yards={base_yards}, "
-                f"minus run-stop ({eff_run_stop}) = {yards}"
-            )
+            # ── Empty-box rules (5E rushing section) ─────────────────
+            # Parse the FAC matchup type to apply the correct modifier
+            matchup_type = self.classify_blocking_matchup(blocking_matchup)
+            log.append(f"[BLOCK] Matchup type: {matchup_type} ({blocking_matchup!r}), box_empty={box_is_empty}, both_empty={both_boxes_empty}")
+
+            if matchup_type == "BK_VS_BOX" and box_is_empty:
+                # BK vs empty box: add BK's BV only (no +2 bonus)
+                yards = base_yards + blocking_back_bv
+                log.append(f"[BLOCK] BK vs empty box → +{blocking_back_bv} (BK BV): {base_yards} + {blocking_back_bv} = {yards}")
+            elif matchup_type == "OL_VS_BOX" and box_is_empty:
+                # OL vs empty letter box: RN result + 2 yards
+                yards = base_yards + 2
+                log.append(f"[BLOCK] OL vs empty box → +2: {base_yards} + 2 = {yards}")
+            elif matchup_type == "TWO_DEF_BOX" and both_boxes_empty:
+                # Two defensive boxes, both empty: RN result + 2 yards
+                yards = base_yards + 2
+                log.append(f"[BLOCK] Two def boxes both empty → +2: {base_yards} + 2 = {yards}")
+            else:
+                # Normal occupied-box case: subtract TV (eff_run_stop)
+                yards = int(base_yards - eff_run_stop)
+                log.append(
+                    f"[YARDS] Base yards={base_yards}, "
+                    f"minus run-stop ({eff_run_stop}) = {yards}"
+                )
 
             # 5E Rule: Inside run max loss = 3 yards; no limit on sweep
             old_yards = yards
@@ -2016,8 +2078,19 @@ class PlayResolver:
         # Defense run-stop modifier (no artificial floor/clamping)
         if result_type in ("GAIN", "BREAKAWAY"):
             base_yards = yards
-            yards = int(yards - eff_run_stop)
-            log.append(f"[LEGACY] Run-stop applied: {base_yards} - {eff_run_stop} = {yards}")
+            matchup_type = self.classify_blocking_matchup(blocking_matchup)
+            if matchup_type == "BK_VS_BOX" and box_is_empty:
+                yards = base_yards + blocking_back_bv
+                log.append(f"[LEGACY] BK vs empty box → +{blocking_back_bv}: {base_yards} + {blocking_back_bv} = {yards}")
+            elif matchup_type == "OL_VS_BOX" and box_is_empty:
+                yards = base_yards + 2
+                log.append(f"[LEGACY] OL vs empty box → +2: {base_yards} + 2 = {yards}")
+            elif matchup_type == "TWO_DEF_BOX" and both_boxes_empty:
+                yards = base_yards + 2
+                log.append(f"[LEGACY] Two def boxes both empty → +2: {base_yards} + 2 = {yards}")
+            else:
+                yards = int(yards - eff_run_stop)
+                log.append(f"[LEGACY] Run-stop applied: {base_yards} - {eff_run_stop} = {yards}")
 
         # ── Out of bounds ────────────────────────────────────────────
         if is_oob:
