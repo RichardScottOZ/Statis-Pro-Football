@@ -30,7 +30,7 @@ from .fast_action_dice import DiceResult, PlayTendency
 from .fac_deck import FACCard, FACDeck
 from .charts import Charts
 from .fac_distributions import (
-    effective_pass_rush, effective_coverage, effective_run_stop,
+    effective_pass_rush, effective_run_stop,
     ZCardTrigger, lookup_z_card_event,
 )
 
@@ -867,9 +867,6 @@ class PlayResolver:
         eff_pass_rush = effective_pass_rush(
             defense_pass_rush, defense_formation, is_blitz_tendency,
         )
-        eff_coverage = effective_coverage(
-            defense_coverage, defense_formation, is_blitz_tendency,
-        )
 
         # ── Stage 0: Pass-rush check (before QB card lookup) ────────
         # Authentic 5E: pass rush value 0-3, higher = more dangerous
@@ -925,21 +922,10 @@ class PlayResolver:
                 rec_td = rec_data.get("td", False)
                 is_td = is_td or rec_td
 
-        # ── Coverage modifier (authentic 5E: pass_defense −2 to +4) ──
-        # Positive coverage reduces yards, negative increases them
-        if result_type == "COMPLETE":
-            cov_shift = eff_coverage  # Direct yard shift
-            yards = max(0, yards - cov_shift)
-            # High coverage can convert completion → incompletion
-            if eff_coverage >= 3 and random.random() < 0.10:
-                result_type = "INCOMPLETE"
-                yards = 0
-                is_td = False
-            # Very high coverage can convert completion → INT (tipped ball)
-            elif eff_coverage >= 4 and random.random() < 0.03:
-                result_type = "INT"
-                yards = 0
-                is_td = False
+        # NOTE: In authentic 5E rules, defense affects the Pass Number (PN),
+        # NOT the reception yards.  The receiver card yards are used as-is.
+        # Coverage modifiers are applied to PN via individual defender PDR
+        # in the 5E pass resolution path (_resolve_pass_inner_5e).
 
         # Z-card check
         z_event = self._check_z_card(
@@ -1342,7 +1328,7 @@ class PlayResolver:
         log: List[str] = []
         log.append(f"[FAC] Card #{fac_card.card_number}: RN={fac_card.run_number} PN={fac_card.pass_number} ER={fac_card.end_run}")
         log.append(f"[PASS] Type={pass_type}, QB={qb.player_name}, Target={receiver.player_name}")
-        log.append(f"[DEF] Formation={defense_formation}, Coverage={defense_coverage}, PassRush={defense_pass_rush}, Strategy={defensive_strategy}")
+        log.append(f"[DEF] Formation={defense_formation}, Strategy={defensive_strategy}")
 
         # ── Step 0: Blitz always forces Pass Rush on Short/Long ──────
         force_pass_rush = False
@@ -1831,12 +1817,9 @@ class PlayResolver:
             is_td = random.random() < 0.05
             log.append(f"[REC CARD] No receiver data, random yards={yards}")
 
-        # Coverage modifier
-        eff_cov = effective_coverage(defense_coverage, defense_formation, is_blitz_tendency)
-        if eff_cov > 0 and isinstance(yards, int):
-            old_yards = yards
-            yards = max(0, yards - eff_cov)
-            log.append(f"[COVERAGE] eff_cov={eff_cov}: {old_yards} → {yards} yards")
+        # NOTE: In authentic 5E rules, defense affects the Pass Number (PN)
+        # via the covering defender's pass_defense_rating (already applied above),
+        # NOT the reception yards.  The receiver card yards are used as-is.
 
         if isinstance(yards, int) and yards >= 99:
             is_td = True

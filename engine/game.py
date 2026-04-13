@@ -783,15 +783,23 @@ class Game:
     # ── 5th-Edition FAC-card-based play execution ────────────────────
 
     def _get_all_receivers(self) -> list:
-        """Get all WR + TE receivers ordered by receiver letter."""
+        """Get on-field WR + TE receivers ordered by receiver letter.
+
+        In 5E, there are at most 5 receiver-eligible on-field positions:
+        FL(0), LE(1), RE(2), BK1(3), BK2(4).  We cap the list to 5 so
+        the FAC card targeting system (which maps BK1→index 3, BK2→index 4)
+        only picks players actually on the field, not bench depth.
+        """
         team = self.get_offense_team()
         receivers = [
             rec for rec in (list(team.roster.wrs) + list(team.roster.tes))
             if not self._is_player_unavailable(rec)
         ]
+        # Cap to on-field positions only (5E: FL, LE, RE, BK1, BK2)
+        receivers = receivers[:5]
         # Assign receiver letters if not already set
         letters = ["A", "B", "C", "D", "E"]
-        for i, rec in enumerate(receivers[:5]):
+        for i, rec in enumerate(receivers):
             if not rec.receiver_letter:
                 rec.receiver_letter = letters[i]
         return receivers
