@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { GameState, HumanPlayCall, PersonnelData } from '../types/game';
 import { OFFENSIVE_STRATEGIES } from '../types/game';
 
@@ -96,15 +96,40 @@ export function HumanPlayCaller({
   const directions = isRunPlay ? RUN_DIRECTIONS : PASS_DIRECTIONS;
 
   // Get available players based on play type
-  const ballCarriers = personnel ? (
-    personnel.offense_all.filter(p => 
+  const ballCarriers = useMemo(() => (
+    personnel ? personnel.offense_all.filter(p =>
       p.position === 'RB' || p.position === 'QB' || p.position === 'WR'
-    )
-  ) : [];
+    ) : []
+  ), [personnel]);
+  const availableBallCarriers = useMemo(
+    () => ballCarriers.filter((p) => !p.injured),
+    [ballCarriers],
+  );
 
-  const receiverTargets = personnel ? (
-    personnel.offense_receivers
-  ) : [];
+  const receiverTargets = useMemo(
+    () => personnel ? personnel.offense_receivers : [],
+    [personnel],
+  );
+  const availableReceiverTargets = useMemo(
+    () => receiverTargets.filter((p) => !p.injured),
+    [receiverTargets],
+  );
+  const autoBallCarrier = useMemo(
+    () => availableBallCarriers.find((p) => p.position === 'RB') ?? availableBallCarriers[0] ?? null,
+    [availableBallCarriers],
+  );
+  const noEligiblePlayer = useMemo(
+    () => ((selectedPlay === 'RUN' || selectedPlay === 'END_AROUND') && availableBallCarriers.length === 0) ||
+      (['SHORT_PASS', 'LONG_PASS', 'QUICK_PASS', 'SCREEN'].includes(selectedPlay) && availableReceiverTargets.length === 0),
+    [availableBallCarriers.length, availableReceiverTargets.length, selectedPlay],
+  );
+
+  useEffect(() => {
+    const pool = isRunPlay ? availableBallCarriers : availableReceiverTargets;
+    if (selectedPlayer && !pool.some((p) => p.name === selectedPlayer)) {
+      setSelectedPlayer('');
+    }
+  }, [availableBallCarriers, availableReceiverTargets, isRunPlay, selectedPlayer]);
 
   const handleCallPlay = () => {
     onCallPlay({
@@ -232,10 +257,10 @@ export function HumanPlayCaller({
             onChange={(e) => setSelectedPlayer(e.target.value)}
             disabled={disabled}
           >
-            <option value="">Auto (Starter RB)</option>
+            <option value="">{autoBallCarrier ? `Auto (${autoBallCarrier.name})` : 'Auto (No healthy ball carrier)'}</option>
             {ballCarriers.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name} ({p.position}) - {p.overall_grade}
+              <option key={p.name} value={p.name} disabled={p.injured}>
+                {p.name} ({p.position}) - {p.overall_grade}{p.injured ? ' [INJ]' : ''}
               </option>
             ))}
           </select>
@@ -252,8 +277,8 @@ export function HumanPlayCaller({
           >
             <option value="">Auto (FAC card determines)</option>
             {receiverTargets.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name} ({p.position}{p.receiver_letter ? ` [${p.receiver_letter}]` : ''}) - {p.overall_grade}
+              <option key={p.name} value={p.name} disabled={p.injured}>
+                {p.name} ({p.position}{p.receiver_letter ? ` [${p.receiver_letter}]` : ''}) - {p.overall_grade}{p.injured ? ' [INJ]' : ''}
               </option>
             ))}
           </select>
@@ -265,11 +290,26 @@ export function HumanPlayCaller({
         <button
           className="btn btn-primary btn-lg"
           onClick={handleCallPlay}
-          disabled={disabled}
+          disabled={disabled || noEligiblePlayer}
         >
           {loading ? '⏳ Running...' : '▶ Call Play'}
         </button>
       </div>
+
+      {isRunPlay && (
+        <div className="timeout-info">
+          <span>
+            {autoBallCarrier
+              ? `🔄 Auto ball carrier: ${autoBallCarrier.name}`
+              : '⚠ No healthy ball carrier available'}
+          </span>
+        </div>
+      )}
+      {isPassPlay && availableReceiverTargets.length === 0 && (
+        <div className="timeout-info">
+          <span>⚠ No healthy eligible receiver available</span>
+        </div>
+      )}
 
       {/* Timeout info */}
       <div className="timeout-info">
