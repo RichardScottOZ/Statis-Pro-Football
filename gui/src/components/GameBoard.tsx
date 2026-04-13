@@ -12,6 +12,8 @@ import { DiceRoller } from './DiceRoller';
 import { FACCardDisplay } from './FACCardDisplay';
 import { GameStats } from './GameStats';
 import { DisplayBoxes } from './DisplayBoxes';
+import { StartingLineup } from './StartingLineup';
+import { DepthChart } from './DepthChart';
 import type { DiceRollResult } from '../types/game';
 
 function formatDefenseFormation(formation?: string | null): string {
@@ -495,6 +497,14 @@ export function GameBoard({
 
           {/* 5E Defensive Display Boxes (A-O) */}
           <DisplayBoxes gameId={gameId} />
+
+          {/* Starting Lineup Cards */}
+          <StartingLineup gameId={gameId} team="home" teamAbbr={state.home_team} />
+          <StartingLineup gameId={gameId} team="away" teamAbbr={state.away_team} />
+
+          {/* Depth Charts */}
+          <DepthChart gameId={gameId} team="home" teamAbbr={state.home_team} />
+          <DepthChart gameId={gameId} team="away" teamAbbr={state.away_team} />
 
           <GameLog plays={state.last_plays} />
         </div>
