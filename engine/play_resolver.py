@@ -1389,10 +1389,13 @@ class PlayResolver:
         # Apply completion_modifier (e.g. from play-action strategy).
         # Positive = wider COM range = subtract from PN (more likely to complete).
         # Negative = narrower COM range = add to PN (less likely to complete).
-        # Combined with strategy_modifier which is always <= 0 (coverage penalties).
-        total_pn_adjustment = -completion_modifier + (-strategy_modifier if strategy_modifier < 0 else 0)
-        # total_pn_adjustment > 0 means increase PN (harder to complete)
-        # total_pn_adjustment < 0 means decrease PN (easier to complete)
+        completion_adjustment = -completion_modifier  # +5 completion → -5 to PN
+
+        # Coverage penalties (double/triple/two-minute) are always <= 0.
+        # Negative strategy_modifier → increase PN (harder to complete).
+        coverage_penalty = -strategy_modifier if strategy_modifier < 0 else 0
+
+        total_pn_adjustment = completion_adjustment + coverage_penalty
         
         if strategy_modifier != 0 or completion_modifier != 0:
             log.append(f"[QB CARD] Strategy modifier={strategy_modifier}, completion modifier={completion_modifier}")
