@@ -2920,7 +2920,7 @@ class PlayResolver:
         Follows 5E rules for Row 1/2/3 placement.
 
         Row 1 (DL) layout mirrors the field:
-          A=LE, B=LDT, C=NT/C, D=RDT, E=RE
+          A=LE, B=LDT, C=NT/C, D=RDT, E=RE (EDGE treated as DE)
         Row 2 (LB) layout:
           F=LOLB, G=LILB, H=MLB, I=RILB, J=ROLB
         Row 3 (DB) layout:
@@ -3017,6 +3017,8 @@ class PlayResolver:
             elif 'L' not in assignments.values():
                 assignments[s.player_name] = 'L'
         for db in (other_dbs + cbs[2:]):
+            if db.player_name in assignments:
+                continue
             for box in ['L', 'M', 'N']:
                 if box not in assignments.values():
                     assignments[db.player_name] = box
