@@ -394,7 +394,7 @@ class TestInterceptionReturnLogging:
             # Should have interception_point set
             assert result.interception_point is not None
             # Description should mention the yard line
-            assert "at the" in result.description
+            assert "yard line" in result.description
             # Debug log should include POI
             log_text = " ".join(result.debug_log)
             assert "Point of interception" in log_text

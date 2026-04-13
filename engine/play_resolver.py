@@ -1681,7 +1681,7 @@ class PlayResolver:
                 play_type="PASS", yards_gained=0,
                 result="INT", turnover=True, turnover_type="INT",
                 description=(
-                    f"{qb.player_name} pass intercepted at the {poi}!"
+                    f"{qb.player_name} pass intercepted at the {poi}-yard line!"
                     f"{' Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
                 ),
                 passer=qb.player_name, receiver=actual_receiver.player_name,
@@ -1739,7 +1739,7 @@ class PlayResolver:
                             play_type="PASS", yards_gained=0,
                             result="INT", turnover=True, turnover_type="INT",
                             description=(
-                                f"{qb.player_name} pass intercepted by {int_check_defender.player_name} at the {poi}!"
+                                f"{qb.player_name} pass intercepted by {int_check_defender.player_name} at the {poi}-yard line!"
                                 f"{' Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
                             ),
                             passer=qb.player_name, receiver=actual_receiver.player_name,
@@ -1765,7 +1765,7 @@ class PlayResolver:
                             play_type="PASS", yards_gained=0,
                             result="INT", turnover=True, turnover_type="INT",
                             description=(
-                                f"{qb.player_name} pass intercepted by {int_check_defender.player_name} at the {poi}!"
+                                f"{qb.player_name} pass intercepted by {int_check_defender.player_name} at the {poi}-yard line!"
                                 f"{' Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
                             ),
                             passer=qb.player_name, receiver=actual_receiver.player_name,
@@ -1792,7 +1792,7 @@ class PlayResolver:
                         play_type="PASS", yards_gained=0,
                         result="INT", turnover=True, turnover_type="INT",
                         description=(
-                            f"{qb.player_name} pass intercepted on PN 48 check at the {poi}! (new PN {new_pn})"
+                            f"{qb.player_name} pass intercepted on PN 48 check at the {poi}-yard line! (new PN {new_pn})"
                             f"{' Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
                         ),
                         passer=qb.player_name, receiver=actual_receiver.player_name,
@@ -1963,7 +1963,7 @@ class PlayResolver:
                 play_type="PASS", yards_gained=0,
                 result="INT", turnover=True, turnover_type="INT",
                 description=(
-                    f"{qb.player_name} screen pass intercepted at the {poi}!"
+                    f"{qb.player_name} screen pass intercepted at the {poi}-yard line!"
                     f"{' Returned for TD!' if int_td else f' Returned {int_yards} yards.'}"
                 ),
                 passer=qb.player_name, receiver=actual_receiver.player_name,
