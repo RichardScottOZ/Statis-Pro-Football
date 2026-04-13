@@ -394,10 +394,16 @@ class TestDefensivePlayCompletionModifiers:
         mod = get_completion_modifier_5e(DefensivePlay.PASS_DEFENSE, "QUICK")
         assert mod == -10
 
-    def test_pass_defense_neutral_for_short_pass(self):
-        """Pass Defense on Short pass: 0."""
+    def test_pass_defense_reduces_short_pass(self):
+        """Pass Defense on Short pass: -5 to completion range (per 5E rules PDF)."""
         from engine.play_types import DefensivePlay, get_completion_modifier_5e
         mod = get_completion_modifier_5e(DefensivePlay.PASS_DEFENSE, "SHORT")
+        assert mod == -5
+
+    def test_pass_defense_neutral_for_long_pass(self):
+        """Pass Defense on Long pass: 0 (neutral per 5E rules PDF)."""
+        from engine.play_types import DefensivePlay, get_completion_modifier_5e
+        mod = get_completion_modifier_5e(DefensivePlay.PASS_DEFENSE, "LONG")
         assert mod == 0
 
     def test_run_defense_boosts_short_pass(self):
@@ -412,18 +418,100 @@ class TestDefensivePlayCompletionModifiers:
         mod = get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_KEY_BACK_1, "LONG")
         assert mod == 7
 
-    def test_prevent_defense_reduces_all(self):
-        """Prevent Defense: -10 Quick, -5 Short, -7 Long."""
+    def test_run_defense_neutral_for_quick_pass(self):
+        """Run Defense on Quick pass: 0 (per 5E rules PDF)."""
         from engine.play_types import DefensivePlay, get_completion_modifier_5e
-        assert get_completion_modifier_5e(DefensivePlay.PREVENT_DEFENSE, "QUICK") == -10
+        mod = get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY, "QUICK")
+        assert mod == 0
+
+    def test_prevent_defense_modifiers(self):
+        """Prevent Defense: 0 Quick, -5 Short, -7 Long (per 5E rules PDF)."""
+        from engine.play_types import DefensivePlay, get_completion_modifier_5e
+        assert get_completion_modifier_5e(DefensivePlay.PREVENT_DEFENSE, "QUICK") == 0
         assert get_completion_modifier_5e(DefensivePlay.PREVENT_DEFENSE, "SHORT") == -5
         assert get_completion_modifier_5e(DefensivePlay.PREVENT_DEFENSE, "LONG") == -7
 
-    def test_blitz_reduces_short_pass(self):
-        """Blitz on Short pass: -5 to completion range."""
+    def test_blitz_boosts_quick_pass(self):
+        """Blitz on Quick pass: +10 to completion range (per 5E rules PDF)."""
         from engine.play_types import DefensivePlay, get_completion_modifier_5e
-        mod = get_completion_modifier_5e(DefensivePlay.BLITZ, "SHORT")
-        assert mod == -5
+        mod = get_completion_modifier_5e(DefensivePlay.BLITZ, "QUICK")
+        assert mod == 10
+
+    def test_blitz_forces_pass_rush_short(self):
+        """Blitz on Short pass: always triggers pass rush."""
+        from engine.play_types import DefensivePlay, should_force_pass_rush
+        assert should_force_pass_rush(DefensivePlay.BLITZ, "SHORT") is True
+
+    def test_blitz_forces_pass_rush_long(self):
+        """Blitz on Long pass: always triggers pass rush."""
+        from engine.play_types import DefensivePlay, should_force_pass_rush
+        assert should_force_pass_rush(DefensivePlay.BLITZ, "LONG") is True
+
+    def test_blitz_does_not_force_pass_rush_quick(self):
+        """Blitz on Quick pass: no forced pass rush, use +10 modifier."""
+        from engine.play_types import DefensivePlay, should_force_pass_rush
+        assert should_force_pass_rush(DefensivePlay.BLITZ, "QUICK") is False
+
+    def test_non_blitz_does_not_force_pass_rush(self):
+        """Non-Blitz defenses never force pass rush."""
+        from engine.play_types import DefensivePlay, should_force_pass_rush
+        for play in (DefensivePlay.PASS_DEFENSE, DefensivePlay.PREVENT_DEFENSE,
+                     DefensivePlay.RUN_DEFENSE_NO_KEY, DefensivePlay.RUN_DEFENSE_KEY_BACK_1):
+            assert should_force_pass_rush(play, "SHORT") is False
+            assert should_force_pass_rush(play, "LONG") is False
+
+    def test_within_20_run_def_quick(self):
+        """Within-20: Run Def / Quick changes from 0 to -10."""
+        from engine.play_types import DefensivePlay, get_completion_modifier_5e
+        assert get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY, "QUICK", within_20=False) == 0
+        assert get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY, "QUICK", within_20=True) == -10
+
+    def test_within_20_pass_def_quick(self):
+        """Within-20: Pass Def / Quick changes from -10 to -15."""
+        from engine.play_types import DefensivePlay, get_completion_modifier_5e
+        assert get_completion_modifier_5e(DefensivePlay.PASS_DEFENSE, "QUICK", within_20=False) == -10
+        assert get_completion_modifier_5e(DefensivePlay.PASS_DEFENSE, "QUICK", within_20=True) == -15
+
+    def test_within_20_run_def_short(self):
+        """Within-20: Run Def / Short changes from +5 to 0."""
+        from engine.play_types import DefensivePlay, get_completion_modifier_5e
+        assert get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY, "SHORT", within_20=False) == 5
+        assert get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY, "SHORT", within_20=True) == 0
+
+    def test_within_20_unchanged_cells(self):
+        """Within-20: cells without parenthetical values stay the same."""
+        from engine.play_types import DefensivePlay, get_completion_modifier_5e
+        # Prevent / Quick stays 0
+        assert get_completion_modifier_5e(DefensivePlay.PREVENT_DEFENSE, "QUICK", within_20=True) == 0
+        # Run Def / Long stays +7
+        assert get_completion_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY, "LONG", within_20=True) == 7
+        # Pass Def / Short stays -5
+        assert get_completion_modifier_5e(DefensivePlay.PASS_DEFENSE, "SHORT", within_20=True) == -5
+
+    def test_screen_rn_modifier_run_defense(self):
+        """Screen RN modifiers for run defense use key/no-key logic."""
+        from engine.play_types import DefensivePlay, get_screen_rn_modifier_5e
+        # Key on correct back = +4
+        assert get_screen_rn_modifier_5e(DefensivePlay.RUN_DEFENSE_KEY_BACK_1, ball_carrier_number=1) == 4
+        # No key = +2
+        assert get_screen_rn_modifier_5e(DefensivePlay.RUN_DEFENSE_NO_KEY) == 2
+        # Wrong key = 0
+        assert get_screen_rn_modifier_5e(DefensivePlay.RUN_DEFENSE_KEY_BACK_2, ball_carrier_number=1) == 0
+
+    def test_screen_rn_modifier_pass_defense(self):
+        """Screen RN modifier for Pass Defense: 0."""
+        from engine.play_types import DefensivePlay, get_screen_rn_modifier_5e
+        assert get_screen_rn_modifier_5e(DefensivePlay.PASS_DEFENSE) == 0
+
+    def test_screen_rn_modifier_prevent(self):
+        """Screen RN modifier for Prevent: -2 (favours offense)."""
+        from engine.play_types import DefensivePlay, get_screen_rn_modifier_5e
+        assert get_screen_rn_modifier_5e(DefensivePlay.PREVENT_DEFENSE) == -2
+
+    def test_screen_rn_modifier_blitz(self):
+        """Screen RN modifier for Blitz: -4 (strongly favours offense)."""
+        from engine.play_types import DefensivePlay, get_screen_rn_modifier_5e
+        assert get_screen_rn_modifier_5e(DefensivePlay.BLITZ) == -4
 
 
 class TestBVTVBattle:
