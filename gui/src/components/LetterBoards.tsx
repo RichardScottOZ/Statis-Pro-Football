@@ -279,6 +279,7 @@ function FormationSlot({ label, player, showBlocks = false, ghost = false }: For
             <div className="fmn-letter">[{player.receiver_letter}]</div>
           )}
           {showBlocks && player.blocks !== 0 && (
+            // Only show BV when non-zero; a zero BV means no blocking modifier
             <div className="fmn-bv" style={{ color: player.blocks > 0 ? '#22c55e' : '#ef4444' }}>
               BV{player.blocks > 0 ? '+' : ''}{player.blocks}
             </div>
@@ -307,7 +308,8 @@ function OffenseFormation({ personnel }: { personnel: PersonnelData }) {
   const qb: PlayerBrief | null = personnel.offense_starters['QB'] ?? null;
   const bk1: PlayerBrief | null = personnel.offense_starters['RB'] ?? null;
 
-  // Find BK2: second RB/FB/HB in offense_all
+  // Find BK2: second RB/FB/HB in offense_all by position, skipping BK1's slot
+  // Note: PlayerBrief has no unique ID, so we skip by name (sufficient for roster uniqueness)
   const bk2: PlayerBrief | null = personnel.offense_all.find(p =>
     (p.position === 'RB' || p.position === 'FB' || p.position === 'HB') &&
     p.name !== bk1?.name
@@ -528,7 +530,7 @@ export function LetterBoards({ personnel, defenseFormation }: LetterBoardsProps)
 
             {/* Backfield + Receivers detail cards */}
             <div className="board-row board-row-label">
-              <span className="row-label-text">SKILL PLAYERS</span>
+              <span className="row-label-text">SKILL PLAYER RATINGS</span>
             </div>
             <div className="board-row board-row-backfield">
               {personnel.offense_starters.QB && (
