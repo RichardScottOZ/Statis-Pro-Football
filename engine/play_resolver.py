@@ -2321,8 +2321,7 @@ class PlayResolver:
 
             elif matchup_type in ("SINGLE_DEF_BOX", "TWO_DEF_BOX"):
                 # DEFENSE ONLY: subtract defender(s) tackle value
-                if (matchup_type == "SINGLE_DEF_BOX" and box_is_empty) or \
-                   (matchup_type == "TWO_DEF_BOX" and both_boxes_empty):
+                if all_boxes_empty:
                     yards = base_yards + 2
                     log.append(
                         f"[BLOCK] Empty box ({blocking_matchup}): "
