@@ -760,13 +760,13 @@ class Game:
             # Convert string to DefensivePlay enum
             try:
                 def_play_5e = DefensivePlay(defensive_play.upper())
-            except (ValueError, KeyError):
+            except ValueError:
                 def_play_5e = DefensivePlay.PASS_DEFENSE
             # Convert string to DefensiveFormation enum
             if defense_formation is not None:
                 try:
                     def_formation_5e = DefensiveFormation(defense_formation.upper())
-                except (ValueError, KeyError):
+                except ValueError:
                     # Try mapping legacy formation names
                     from .play_types import LEGACY_FORMATION_TO_FORMATION
                     def_formation_5e = LEGACY_FORMATION_TO_FORMATION.get(
@@ -778,7 +778,7 @@ class Game:
             if defensive_strategy is not None:
                 try:
                     def_strategy_5e = DefensiveStrategy(defensive_strategy.upper())
-                except (ValueError, KeyError):
+                except ValueError:
                     def_strategy_5e = DefensiveStrategy.NONE
             else:
                 def_strategy_5e = DefensiveStrategy.NONE
