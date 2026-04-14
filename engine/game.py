@@ -1081,8 +1081,18 @@ class Game:
                 self.state.play_log.append(
                     f"Score: Away {self.state.score.away} - Home {self.state.score.home}"
                 )
-            opp_yl = max(20, 100 - self.state.yard_line - 7)
-            self._change_possession(opp_yl)
+                # Scoring team kicks off to opponent after a field goal
+                kickoff = self._do_kickoff(
+                    kicking_team=self.get_offense_team(),
+                    receiving_team=self.get_defense_team(),
+                )
+                self.state.play_log.append(kickoff.description)
+                new_yl = self._kickoff_yard_line(kickoff)
+                self._change_possession(new_yl)
+            else:
+                # Missed FG: opponent gets ball at spot of kick or 20
+                opp_yl = max(20, 100 - self.state.yard_line - 7)
+                self._change_possession(opp_yl)
             return result
 
         if play_call.play_type == "KNEEL":

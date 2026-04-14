@@ -77,7 +77,7 @@ def _solo_code_to_play(code: str) -> PlayCall:
         return PlayCall("RUN", "UNDER_CENTER", "IL", f"SOLO: blitz")
 
     # Fallback — treat unknown codes as a run
-    return PlayCall("RUN", "I_FORM", "MIDDLE", f"SOLO: unknown code {code}")
+    return PlayCall("RUN", "I_FORM", random.choice(["IL", "IR"]), f"SOLO: unknown code {code}")
 
 
 def _situation_number(situation: GameSituation) -> int:
@@ -111,7 +111,7 @@ class SolitaireAI:
         fg_range = situation.yard_line >= 55
 
         if situation.distance <= 1 and situation.yard_line > 60:
-            return PlayCall("RUN", "UNDER_CENTER", "MIDDLE",
+            return PlayCall("RUN", "UNDER_CENTER", random.choice(["IL", "IR"]),
                             "Short yardage in opponent territory, going for it")
 
         if fg_range and situation.yard_line >= 45:
@@ -217,7 +217,7 @@ class SolitaireAI:
         if situation.time_remaining <= 60 and situation.score_diff > 0:
             return PlayCall("KNEEL", "UNDER_CENTER", "MIDDLE", "Running out the clock")
         # Default run play
-        direction = random.choice(["LEFT", "RIGHT", "MIDDLE"])
+        direction = random.choice(["IL", "IR", "SL", "SR"])
         return PlayCall("RUN", "I_FORM", direction, "Default play")
 
     def call_defense_5e(self, situation: GameSituation,
