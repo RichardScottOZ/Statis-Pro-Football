@@ -643,6 +643,9 @@ def download_game_log(game_id: str):
                 f"{d.result} ({d.points_scored} pts)"
             )
 
+    # Append player stats boxscore
+    lines.extend(game.format_boxscore())
+
     content = "\n".join(lines)
     return PlainTextResponse(
         content=content,

@@ -1498,7 +1498,9 @@ class PlayResolver:
                                 yards = random.randint(1, 8)
                     else:
                         yards = random.randint(-2, 5)
-                    is_td = random.random() < 0.03
+                    is_td = self.check_pass_td_at_goal(yard_line, yards)
+                    if is_td:
+                        yards = 100 - yard_line
                     log.append(f"[SCRAMBLE] Yards={yards}, TD={is_td}")
                     r = PlayResult(
                         play_type="PASS", yards_gained=yards,
@@ -2091,7 +2093,9 @@ class PlayResolver:
             )
 
         yards = max(0, int(base_yards * multiplier))
-        is_td = random.random() < 0.03
+        is_td = self.check_pass_td_at_goal(yard_line, yards)
+        if is_td:
+            yards = 100 - yard_line
 
         if is_td:
             desc = f"{qb.player_name} screen pass to {actual_receiver.player_name} for a TOUCHDOWN!"
@@ -2122,7 +2126,8 @@ class PlayResolver:
                        offensive_blockers_by_pos: Optional[Dict[str, 'PlayerCard']] = None,
                        fumbles_lost_max: int = 21,
                        def_fumble_adj: int = 0,
-                       is_home: bool = False) -> PlayResult:
+                       is_home: bool = False,
+                       yard_line: int = 25) -> PlayResult:
         """Resolve a run play using 5th-edition FAC card mechanics.
 
         Authentic resolution:
@@ -2313,7 +2318,9 @@ class PlayResolver:
                         yards = int(yards)
                     except (ValueError, TypeError):
                         yards = random.randint(15, 40)
-                is_td = random.random() < 0.2
+                is_td = (yard_line + yards) >= 100
+                if is_td:
+                    yards = 100 - yard_line
                 log.append(
                     f"[BREAKAWAY] FAC blocking matchup is BREAK → "
                     f"using LG column={row.v3}, yards={yards}, TD={is_td}"
@@ -2338,7 +2345,9 @@ class PlayResolver:
                 if yards == "Sg":
                     # Special gain (breakaway from card)
                     yards = row.v3 if isinstance(row.v3, int) else random.randint(15, 40)
-                    is_td = random.random() < 0.2
+                    is_td = (yard_line + yards) >= 100
+                    if is_td:
+                        yards = 100 - yard_line
                     log.append(f"[RUSH] Special Gain (breakaway)! Yards={yards}, TD={is_td}")
                     desc = f"{rusher.player_name} breaks free for {yards} yards!"
                     if is_td:
@@ -2448,7 +2457,9 @@ class PlayResolver:
                 r.debug_log = log
                 return r
 
-            is_td = random.random() < 0.03
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
 
             # Check Z RES on the card for additional effects (authentic path)
             z_res_info = fac_card.parse_z_result()
@@ -2798,7 +2809,8 @@ class PlayResolver:
 
     def resolve_fake_field_goal(self, deck: FACDeck,
                                 qb_or_holder: PlayerCard,
-                                minutes_remaining: float = 3.0) -> PlayResult:
+                                minutes_remaining: float = 3.0,
+                                yard_line: int = 25) -> PlayResult:
         """Resolve a fake field goal attempt (Rule 21).
 
         - Draw FAC for RN: 1-6 = pass/run result, 7-9 = incomplete,
@@ -2824,7 +2836,9 @@ class PlayResolver:
         if 1 <= rn <= 6:
             # Pass/run result — scramble for yards
             yards = random.randint(2, 15)
-            is_td = random.random() < 0.08
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="PASS", yards_gained=yards,
                 result="TD" if is_td else "COMPLETE",
@@ -2854,7 +2868,8 @@ class PlayResolver:
     # ── Rule 22: Fake Punt ───────────────────────────────────────────
 
     def resolve_fake_punt(self, deck: FACDeck,
-                          punter: PlayerCard) -> PlayResult:
+                          punter: PlayerCard,
+                          yard_line: int = 25) -> PlayResult:
         """Resolve a fake punt attempt (Rule 22).
 
         - Draw FAC for RN: 1-5 = pass result, 6-12 = punter run results.
@@ -2874,7 +2889,9 @@ class PlayResolver:
         if 1 <= rn <= 5:
             # Pass result
             yards = random.randint(5, 20)
-            is_td = random.random() < 0.05
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="PASS", yards_gained=yards,
                 result="TD" if is_td else "COMPLETE",
@@ -2887,7 +2904,9 @@ class PlayResolver:
             # Daylight run: PN × 2 yards
             pn = fac_card.pass_num_int or random.randint(1, 48)
             yards = pn * 2
-            is_td = random.random() < 0.15
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="RUN", yards_gained=yards,
                 result="TD" if is_td else "GAIN",
@@ -2900,7 +2919,9 @@ class PlayResolver:
         else:
             # RN 6-11: punter run results
             yards = random.randint(-2, 8)
-            is_td = random.random() < 0.03
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="RUN", yards_gained=yards,
                 result="TD" if is_td else "GAIN",

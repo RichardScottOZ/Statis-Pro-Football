@@ -971,3 +971,82 @@ class TestAuthenticRunResolution:
             f"BREAK matchup should ignore run-stop, "
             f"got {result.yards_gained} with run-stop=99"
         )
+
+    def test_no_run_td_from_own_territory(self):
+        """A normal run from deep in own territory must never produce a random TD."""
+        td_count = 0
+        for seed in range(500):
+            deck = FACDeck(seed=seed)
+            card = deck.draw_non_z()
+            result = self.resolver.resolve_run_5e(
+                card, deck, self.rb, "IL", yard_line=10,
+            )
+            if result.is_touchdown:
+                td_count += 1
+        assert td_count == 0, f"Got {td_count} impossible run TDs from own 10-yard line"
+
+    def test_run_td_when_reaching_end_zone(self):
+        """A run from close to the goal line can be a TD if yards reach 100."""
+        td_found = False
+        for seed in range(500):
+            deck = FACDeck(seed=seed)
+            card = deck.draw_non_z()
+            result = self.resolver.resolve_run_5e(
+                card, deck, self.rb, "IL", yard_line=97,
+            )
+            if result.is_touchdown:
+                td_found = True
+                assert result.yards_gained <= 3
+                break
+        assert td_found, "Expected at least one TD from the 97-yard line in 500 attempts"
+
+
+class TestBoxscoreOutput:
+    """Test player stats boxscore output."""
+
+    def _load_teams(self):
+        """Load two teams for testing."""
+        import json
+        data_dir = os.path.join(os.path.dirname(__file__), "..", "engine", "data", "2025")
+        if not os.path.exists(data_dir):
+            data_dir = os.path.join(os.path.dirname(__file__), "..", "engine", "data", "2024")
+        if not os.path.exists(data_dir):
+            pytest.skip("No team data available")
+        teams = sorted(os.listdir(data_dir))
+        team_files = [f for f in teams if f.endswith(".json")]
+        if len(team_files) < 2:
+            pytest.skip("Need at least 2 team data files")
+        with open(os.path.join(data_dir, team_files[0])) as f:
+            home_data = json.load(f)
+        with open(os.path.join(data_dir, team_files[1])) as f:
+            away_data = json.load(f)
+        return Team.from_dict(home_data), Team.from_dict(away_data)
+
+    def test_boxscore_contains_passing_stats(self):
+        """Boxscore should include passing stats when passes have been thrown."""
+        random.seed(42)
+        home, away = self._load_teams()
+        game = Game(home, away, use_5e=True, seed=42)
+        game.simulate_game()
+        lines = game.format_boxscore()
+        text = "\n".join(lines)
+        assert "PLAYER STATS" in text
+        assert "PASSING" in text or "RUSHING" in text or "RECEIVING" in text
+
+    def test_boxscore_in_play_log_after_game_over(self):
+        """Boxscore should appear in the play_log when the game ends."""
+        random.seed(42)
+        home, away = self._load_teams()
+        game = Game(home, away, use_5e=True, seed=42)
+        game.simulate_game()
+        log_text = "\n".join(game.state.play_log)
+        assert "PLAYER STATS" in log_text
+
+    def test_empty_stats_produces_no_boxscore(self):
+        """If no plays occurred, format_boxscore returns empty list."""
+        random.seed(42)
+        home, away = self._load_teams()
+        game = Game(home, away, use_5e=True, seed=42)
+        # Don't simulate — stats should be empty
+        lines = game.format_boxscore()
+        assert lines == []

@@ -867,6 +867,7 @@ class Game:
                         f"GAME OVER! Final: Away {self.state.score.away} - Home {self.state.score.home}"
                     )
                     self.state.play_log.append(f"Winner: {winner} team")
+                    self.state.play_log.extend(self.format_boxscore())
             else:
                 self.state.time_remaining = 900
                 self.state.play_log.append(
@@ -1364,6 +1365,7 @@ class Game:
                 fumbles_lost_max=off_fumbles_lost_max,
                 def_fumble_adj=def_fumble_adj_val,
                 is_home=off_is_home,
+                yard_line=self.state.yard_line,
             )
             result.defense_formation = def_formation
             # Store box assignments on result for tracking
@@ -1586,6 +1588,91 @@ class Game:
 
         return self.state
 
+    def format_boxscore(self) -> List[str]:
+        """Format a standard player stats boxscore as a list of lines."""
+        lines: List[str] = []
+        stats = self.state.player_stats
+        if not stats:
+            return lines
+
+        lines.append("")
+        lines.append("=" * 50)
+        lines.append("PLAYER STATS")
+        lines.append("=" * 50)
+
+        # Collect players with passing stats
+        passers = [
+            (name, s) for name, s in stats.items()
+            if s.get("pass_attempts", 0) > 0
+        ]
+        if passers:
+            lines.append("")
+            lines.append("PASSING                  Cmp/Att   Yds  TD INT Sck")
+            lines.append("-" * 50)
+            for name, s in sorted(passers, key=lambda x: -x[1].get("passing_yards", 0)):
+                cmp = s.get("completions", 0)
+                att = s.get("pass_attempts", 0)
+                yds = s.get("passing_yards", 0)
+                td = s.get("passing_tds", 0)
+                ints = s.get("interceptions", 0)
+                sck = s.get("sacks", 0)
+                lines.append(f"  {name:<22s} {cmp:>3d}/{att:<3d} {yds:>5d} {td:>3d} {ints:>3d} {sck:>3d}")
+
+        # Collect players with rushing stats
+        rushers = [
+            (name, s) for name, s in stats.items()
+            if s.get("rushing_attempts", 0) > 0
+        ]
+        if rushers:
+            lines.append("")
+            lines.append("RUSHING                    Att   Yds  TD")
+            lines.append("-" * 50)
+            for name, s in sorted(rushers, key=lambda x: -x[1].get("rushing_yards", 0)):
+                att = s.get("rushing_attempts", 0)
+                yds = s.get("rushing_yards", 0)
+                td = s.get("rushing_tds", 0)
+                lines.append(f"  {name:<24s} {att:>3d} {yds:>5d} {td:>3d}")
+
+        # Collect players with receiving stats
+        receivers = [
+            (name, s) for name, s in stats.items()
+            if s.get("receptions", 0) > 0
+        ]
+        if receivers:
+            lines.append("")
+            lines.append("RECEIVING                  Rec   Yds  TD")
+            lines.append("-" * 50)
+            for name, s in sorted(receivers, key=lambda x: -x[1].get("receiving_yards", 0)):
+                rec = s.get("receptions", 0)
+                yds = s.get("receiving_yards", 0)
+                td = s.get("receiving_tds", 0)
+                lines.append(f"  {name:<24s} {rec:>3d} {yds:>5d} {td:>3d}")
+
+        # Fumbles lost — tracked at team level
+        if any(v > 0 for v in self.state.turnovers.values()):
+            lines.append("")
+            lines.append("TURNOVERS")
+            lines.append("-" * 50)
+            for team_key in ("away", "home"):
+                team_name = self.state.away_team if team_key == "away" else self.state.home_team
+                to = self.state.turnovers.get(team_key, 0)
+                if to > 0:
+                    lines.append(f"  {team_name}: {to}")
+
+        # Penalties
+        if any(v > 0 for v in self.state.penalties.values()):
+            lines.append("")
+            lines.append("PENALTIES")
+            lines.append("-" * 50)
+            for team_key in ("away", "home"):
+                team_name = self.state.away_team if team_key == "away" else self.state.home_team
+                cnt = self.state.penalties.get(team_key, 0)
+                yds = self.state.penalty_yards.get(team_key, 0)
+                if cnt > 0:
+                    lines.append(f"  {team_name}: {cnt} for {yds} yards")
+
+        return lines
+
     def _time_str(self) -> str:
         mins = self.state.time_remaining // 60
         secs = self.state.time_remaining % 60
@@ -1646,7 +1733,8 @@ class Game:
         if not punter:
             return PlayResult("PUNT", -10, "GAIN",
                               description="Fake punt failed — no punter found")
-        result = self.resolver.resolve_fake_punt(self.deck, punter)
+        result = self.resolver.resolve_fake_punt(self.deck, punter,
+                                                yard_line=self.state.yard_line)
         self.state.play_log.append(f"FAKE PUNT: {result.description}")
         if result.turnover:
             self._handle_turnover(result)
@@ -1677,7 +1765,8 @@ class Game:
                               description="Fake FG failed — no holder found")
         minutes_remaining = self.state.time_remaining / 60.0
         result = self.resolver.resolve_fake_field_goal(
-            self.deck, qb, minutes_remaining
+            self.deck, qb, minutes_remaining,
+            yard_line=self.state.yard_line,
         )
         self.state.play_log.append(f"FAKE FG: {result.description}")
         if result.turnover:
