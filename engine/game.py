@@ -621,15 +621,31 @@ class Game:
         punt_dice = self.dice.roll()
         returner = self.get_returner(self.get_defense_team(), "PR")
 
+        # Get 5E team card data for punt return
+        defense_team = self.get_defense_team()
+        pr_returners = defense_team.get_punt_returners()
+        pr_table = defense_team.get_punt_return_table()
+        rec_is_home = (defense_team == self.home_team)
+
         if punter:
-            result = self.resolver.resolve_punt(punter, dice=punt_dice, returner=returner)
+            result = self.resolver.resolve_punt(
+                punter, dice=punt_dice, returner=returner,
+                deck=self.deck,
+                punt_returners=pr_returners,
+                punt_return_table=pr_table,
+                yard_line=self.state.yard_line,
+                fumbles_lost_max=getattr(defense_team, 'fumbles_lost_max', 21),
+                def_fumble_adj=getattr(self.get_offense_team(), 'def_fumble_adj', 0),
+                is_home=rec_is_home,
+            )
         else:
             dist = random.randint(38, 52)
             result = PlayResult("PUNT", dist - 8, "PUNT",
                                 description=f"Punt {dist} yards, returned 8 yards")
 
-        punt_distance = random.randint(38, 52)
-        new_yl = max(1, 100 - self.state.yard_line - punt_distance + random.randint(0, 10))
+        # Use actual punt result for field position
+        net_punt = result.yards_gained
+        new_yl = max(1, min(99, 100 - self.state.yard_line - net_punt))
         self._change_possession(new_yl)
         return result
 

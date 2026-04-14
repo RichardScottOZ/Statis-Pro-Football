@@ -1043,10 +1043,18 @@ class PlayResolver:
 
     def resolve_punt(self, punter: PlayerCard,
                      dice: Optional[DiceResult] = None,
-                     returner: Optional[PlayerCard] = None) -> PlayResult:
+                     returner: Optional[PlayerCard] = None,
+                     deck: Optional[FACDeck] = None,
+                     punt_returners: Optional[List[Dict[str, Any]]] = None,
+                     punt_return_table: Optional[List[List[Any]]] = None,
+                     yard_line: int = 30,
+                     fumbles_lost_max: int = 21,
+                     def_fumble_adj: int = 0,
+                     is_home: bool = False) -> PlayResult:
         log: List[str] = []
         returner_name = returner.player_name if returner else "unknown"
         returner_grade = getattr(returner, 'overall_grade', '?') if returner else '?'
+        has_5e_return = (deck is not None and punt_returners and punt_return_table)
 
         # Use slot-based punt column if available
         if punter.punt_column and dice is not None:
@@ -1087,23 +1095,71 @@ class PlayResolver:
             else:
                 distance = punt_data.get("yards", int(punter.avg_distance))
                 fair_catch = Charts.check_fair_catch(punter.punt_return_pct)
-                base_return = 0 if fair_catch else Charts.roll_punt_return()
-                modifier = 0 if fair_catch else self._returner_modifier(returner, "PR")
-                return_yards = 0 if fair_catch else max(0, base_return + modifier)
-                log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
-                log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
+
                 if fair_catch:
+                    return_yards = 0
+                    log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
+                    log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
                     log.append(f"[PR] Fair catch by {returner_name}")
-                else:
-                    log.append(f"[PR] Base return yards={base_return}, returner modifier={modifier:+d}, return yards={return_yards}")
-                desc = f"{punter.player_name} punts {distance} yards"
-                if fair_catch:
+                    desc = f"{punter.player_name} punts {distance} yards"
                     desc += f", fair catch by {returner.player_name}" if returner else ", fair catch"
-                elif return_yards > 0:
-                    desc += (
-                        f", {returner.player_name} returns it {return_yards} yards"
-                        if returner else f", returned {return_yards} yards"
+                elif has_5e_return:
+                    # 5E: use team card PR return tables — read directly, no modifiers
+                    pr_info = self.resolve_punt_return_5e(
+                        deck, punt_returners, punt_return_table,
+                        punt_distance=distance, yard_line=yard_line,
+                        fumbles_lost_max=fumbles_lost_max,
+                        def_fumble_adj=def_fumble_adj,
+                        is_home=is_home,
                     )
+                    log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
+                    log.extend(pr_info["log_entries"])
+
+                    if pr_info["is_td"]:
+                        r = PlayResult(
+                            play_type="PUNT", yards_gained=distance,
+                            result="PR_TD", is_touchdown=True,
+                            description=(f"{punter.player_name} punts {distance} yards, "
+                                         f"{pr_info['returner_name']} returns it for a TOUCHDOWN!"),
+                            rusher=pr_info["returner_name"],
+                        )
+                        r.debug_log = log
+                        return r
+                    if pr_info["is_fumble"]:
+                        return_yards = pr_info["return_yards"]
+                        desc = (f"{punter.player_name} punts {distance} yards, "
+                                f"{pr_info['returner_name']} returns {return_yards} yards — FUMBLE! "
+                                f"{'Defense recovers!' if pr_info['fumble_lost'] else 'Offense recovers.'}")
+                        r = PlayResult(
+                            play_type="PUNT", yards_gained=distance - return_yards,
+                            result="FUMBLE",
+                            turnover=pr_info["fumble_lost"],
+                            turnover_type="FUMBLE" if pr_info["fumble_lost"] else None,
+                            description=desc,
+                            rusher=pr_info["returner_name"],
+                        )
+                        r.debug_log = log
+                        return r
+
+                    return_yards = pr_info["return_yards"]
+                    desc = f"{punter.player_name} punts {distance} yards"
+                    if return_yards > 0:
+                        desc += f", {pr_info['returner_name']} returns it {return_yards} yards"
+                else:
+                    # Legacy fallback: base return + modifier
+                    base_return = Charts.roll_punt_return()
+                    modifier = self._returner_modifier(returner, "PR")
+                    return_yards = max(0, base_return + modifier)
+                    log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
+                    log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
+                    log.append(f"[PR] Base return yards={base_return}, returner modifier={modifier:+d}, return yards={return_yards}")
+                    desc = f"{punter.player_name} punts {distance} yards"
+                    if return_yards > 0:
+                        desc += (
+                            f", {returner.player_name} returns it {return_yards} yards"
+                            if returner else f", returned {return_yards} yards"
+                        )
+
                 log.append(f"[PR] Net punt: {distance - return_yards} yards")
                 r = PlayResult(
                     play_type="PUNT",
@@ -1121,25 +1177,73 @@ class PlayResolver:
 
         inside_20 = random.random() < punter.inside_20_rate
         fair_catch = Charts.check_fair_catch(punter.punt_return_pct)
-        base_return = 0 if (fair_catch or inside_20) else Charts.roll_punt_return()
-        modifier = 0 if (fair_catch or inside_20) else self._returner_modifier(returner, "PR")
-        return_yards = 0 if (fair_catch or inside_20) else max(0, base_return + modifier)
 
-        log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
-        log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
-        desc = f"{punter.player_name} punts {distance} yards"
         if inside_20:
-            desc += ", downed inside the 20"
             return_yards = 0
+            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
+            log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
             log.append(f"[PR] Downed inside 20 (no return)")
+            desc = f"{punter.player_name} punts {distance} yards, downed inside the 20"
         elif fair_catch:
-            desc += f", fair catch by {returner.player_name}" if returner else ", fair catch"
+            return_yards = 0
+            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
+            log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
             log.append(f"[PR] Fair catch by {returner_name}")
-        elif return_yards > 0 and returner:
-            desc += f", {returner.player_name} returns it {return_yards} yards"
-            log.append(f"[PR] Base return yards={base_return}, returner modifier={modifier:+d}, return yards={return_yards}")
+            desc = f"{punter.player_name} punts {distance} yards"
+            desc += f", fair catch by {returner.player_name}" if returner else ", fair catch"
+        elif has_5e_return:
+            # 5E: use team card PR return tables — read directly, no modifiers
+            pr_info = self.resolve_punt_return_5e(
+                deck, punt_returners, punt_return_table,
+                punt_distance=distance, yard_line=yard_line,
+                fumbles_lost_max=fumbles_lost_max,
+                def_fumble_adj=def_fumble_adj,
+                is_home=is_home,
+            )
+            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy punt, 5E return)")
+            log.extend(pr_info["log_entries"])
+
+            if pr_info["is_td"]:
+                r = PlayResult(
+                    play_type="PUNT", yards_gained=distance,
+                    result="PR_TD", is_touchdown=True,
+                    description=(f"{punter.player_name} punts {distance} yards, "
+                                 f"{pr_info['returner_name']} returns it for a TOUCHDOWN!"),
+                    rusher=pr_info["returner_name"],
+                )
+                r.debug_log = log
+                return r
+            if pr_info["is_fumble"]:
+                return_yards = pr_info["return_yards"]
+                desc = (f"{punter.player_name} punts {distance} yards, "
+                        f"{pr_info['returner_name']} returns {return_yards} yards — FUMBLE! "
+                        f"{'Defense recovers!' if pr_info['fumble_lost'] else 'Offense recovers.'}")
+                r = PlayResult(
+                    play_type="PUNT", yards_gained=distance - return_yards,
+                    result="FUMBLE",
+                    turnover=pr_info["fumble_lost"],
+                    turnover_type="FUMBLE" if pr_info["fumble_lost"] else None,
+                    description=desc,
+                    rusher=pr_info["returner_name"],
+                )
+                r.debug_log = log
+                return r
+
+            return_yards = pr_info["return_yards"]
+            desc = f"{punter.player_name} punts {distance} yards"
+            if return_yards > 0:
+                desc += f", {pr_info['returner_name']} returns it {return_yards} yards"
         else:
+            # Legacy fallback: base return + modifier
+            base_return = Charts.roll_punt_return()
+            modifier = self._returner_modifier(returner, "PR")
+            return_yards = max(0, base_return + modifier)
+            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
+            log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
             log.append(f"[PR] Base return yards={base_return}, returner modifier={modifier:+d}, return yards={return_yards}")
+            desc = f"{punter.player_name} punts {distance} yards"
+            if return_yards > 0 and returner:
+                desc += f", {returner.player_name} returns it {return_yards} yards"
 
         log.append(f"[PR] Net punt: {distance - return_yards} yards")
         r = PlayResult(
