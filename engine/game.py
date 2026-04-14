@@ -1,7 +1,7 @@
 """Core game state and logic for Statis Pro Football."""
 import random
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from enum import Enum
 
 from .fac_deck import FACDeck, FACCard
@@ -74,6 +74,9 @@ class GameState:
     # 5E: Track last play's ball carrier for endurance
     last_ball_carrier: Optional[str] = None
     prev_ball_carrier: Optional[str] = None  # Two plays ago for endurance 2
+    # 5E: Endurance 3/4 usage tracking
+    endurance_used_this_drive: Set[str] = field(default_factory=set)
+    endurance_used_this_quarter: Set[str] = field(default_factory=set)
     # Penalty tracking: {team: count}
     penalties: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
     penalty_yards: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
@@ -249,6 +252,30 @@ class Game:
             return player
         return None
 
+    def _immediate_injury_swap(self, injured_player_name: str) -> None:
+        """Immediately swap an injured player out of the starter slot.
+
+        When a player is injured mid-play, the formation grid must reflect
+        the replacement at once — not on the next play.  Walk every position
+        list on *both* teams and, if the injured player sits in the starter
+        slot (index 0), promote the first healthy backup.
+        """
+        for team in (self.home_team, self.away_team):
+            pos_lists = [
+                (team.roster.qbs, "QB"),
+                (team.roster.rbs, "RB"),
+                (team.roster.wrs, "WR"),
+                (team.roster.tes, "TE"),
+                (team.roster.kickers, "K"),
+                (team.roster.punters, "P"),
+            ]
+            for players, pos in pos_lists:
+                if not players or players[0].player_name != injured_player_name:
+                    continue
+                # The injured player is currently in the starter slot — swap.
+                self._resolve_position_player(players, pos)
+                return  # each player belongs to one list only
+
     def validate_player_availability(self, player_name: str) -> PlayerCard:
         for player in self.get_offense_team().roster.all_players():
             if player.player_name == player_name:
@@ -256,6 +283,56 @@ class Game:
                     raise ValueError(f"{player_name} is injured and unavailable.")
                 return player
         raise ValueError(f"{player_name} is not on the current offense.")
+
+    # ── 5E Endurance ─────────────────────────────────────────────────
+
+    def _check_endurance_violation(self, player: PlayerCard) -> Optional[str]:
+        """Check if directing a play at *player* violates endurance rules.
+
+        Returns a violation string (e.g. ``"endurance_1"``) or ``None``.
+
+        5E endurance ratings (``endurance_rushing`` field on the card):
+          0 → unlimited (RB-0, "workhorse")
+          1 → must rest 1 play between carries (RB-1)
+          2 → must rest 2 plays between carries (RB-2)
+          3 → once per drive / possession (RB-3)
+          4 → once per quarter (RB-4)
+        """
+        endurance = getattr(player, "endurance_rushing", None)
+        if endurance is None or endurance == 0:
+            return None
+        name = player.player_name
+        if endurance == 1:
+            if self.state.last_ball_carrier == name:
+                return "endurance_1"
+        elif endurance == 2:
+            if name in (self.state.last_ball_carrier, self.state.prev_ball_carrier):
+                return "endurance_2"
+        elif endurance == 3:
+            if name in self.state.endurance_used_this_drive:
+                return "endurance_3"
+        elif endurance >= 4:
+            if name in self.state.endurance_used_this_quarter:
+                return "endurance_4"
+        return None
+
+    def _apply_endurance_penalty_to_run(self, player: PlayerCard,
+                                         run_number: int) -> tuple:
+        """If the ball carrier violates endurance, add +2 to run number.
+
+        Returns ``(adjusted_run_number, violation_string_or_None)``.
+        """
+        violation = self._check_endurance_violation(player)
+        if violation:
+            return run_number + 2, violation
+        return run_number, None
+
+    def _record_endurance_usage(self, player_name: Optional[str]) -> None:
+        """Record that *player_name* was the ball carrier this play."""
+        if not player_name:
+            return
+        self.state.endurance_used_this_drive.add(player_name)
+        self.state.endurance_used_this_quarter.add(player_name)
 
     def get_returner(self, team: Team, kind: str) -> Optional[PlayerCard]:
         return team.get_return_specialist(kind, unavailable_names=set(self.state.injuries))
@@ -392,6 +469,11 @@ class Game:
         self.state.yard_line = new_yard_line
         self.state.down = 1
         self.state.distance = 10
+        # Reset per-drive endurance tracking on possession change
+        self.state.endurance_used_this_drive = set()
+        # Also reset consecutive-play counters since it's a new possession
+        self.state.last_ball_carrier = None
+        self.state.prev_ball_carrier = None
 
     def _score_touchdown(self) -> None:
         if self.state.possession == "home":
@@ -704,6 +786,8 @@ class Game:
 
         if self.state.time_remaining <= 0:
             self.state.quarter += 1
+            # Reset per-quarter endurance tracking
+            self.state.endurance_used_this_quarter = set()
             if self.state.quarter > 4:
                 if self.state.score.home == self.state.score.away:
                     self.state.quarter = 5
@@ -1025,11 +1109,16 @@ class Game:
                 self.state.play_log.append(
                     f"  ⚕ {injured_player} injured! Out for {duration} plays."
                 )
+                # Immediately swap injured player out of the starter slot so
+                # the formation grid and personnel views reflect the change.
+                self._immediate_injury_swap(injured_player)
 
         # ── 5E Endurance tracking ────────────────────────────────────
         ball_carrier = result.rusher or result.receiver
         self.state.prev_ball_carrier = self.state.last_ball_carrier
         self.state.last_ball_carrier = ball_carrier
+        # Record usage for endurance 3 (per-drive) and 4 (per-quarter)
+        self._record_endurance_usage(ball_carrier)
         
         # ── 5E Two-Minute Offense yardage restrictions ───────────────
         if result.play_type in ("RUN", "SCREEN") and not result.turnover:
@@ -1172,6 +1261,16 @@ class Game:
                         break
 
         if rusher:
+            # ── Endurance check: +2 to RN if ball carrier violates ────
+            endurance_rn_penalty = 0
+            endurance_violation = self._check_endurance_violation(rusher)
+            if endurance_violation:
+                endurance_rn_penalty = 2
+                self._record_personnel_note(
+                    f"Endurance violation ({endurance_violation}): "
+                    f"+2 RN penalty for {rusher.player_name}."
+                )
+
             # Determine fumble team ratings
             offense = self.get_offense_team()
             off_fumbles_lost_max = getattr(offense, 'fumbles_lost_max', 21) if offense else 21
@@ -1183,6 +1282,7 @@ class Game:
                 defense_run_stop=def_run_stop,
                 defense_formation=def_formation,
                 defensive_play_5e=defensive_play_5e,
+                extra_rn_modifier=endurance_rn_penalty,
                 blocking_back_bv=blocking_back_bv,
                 defenders_by_box=defenders_by_box,
                 offensive_blockers_by_pos=offensive_blockers_by_pos,
