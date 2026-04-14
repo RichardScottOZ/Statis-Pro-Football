@@ -95,9 +95,16 @@ def _player_brief(p, unavailable_names: Optional[set[str]] = None):
         # Rushing (12-row N/SG/LG)
         "rushing": [r.to_list() if r else None for r in getattr(p, "rushing", [])],
         "endurance_rushing": getattr(p, "endurance_rushing", 0),
-        # Human-readable endurance label, e.g. "RB-0", "WR-1", "TE-2"
-        "endurance_label": f"{p.position}-{getattr(p, 'endurance_rushing', 0)}"
-            if p.position in ("RB", "WR", "TE", "FB", "HB") else "",
+        # Human-readable endurance label — for WR/TE show pass endurance
+        # (the one that matters when they're targeted), for RB/FB/HB show
+        # rushing endurance.
+        "endurance_label": (
+            f"{p.position}-{getattr(p, 'endurance_pass', 0)}"
+            if p.position in ("WR", "TE")
+            else f"{p.position}-{getattr(p, 'endurance_rushing', 0)}"
+            if p.position in ("RB", "FB", "HB")
+            else ""
+        ),
         # Pass gain (12-row Q/S/L)
         "pass_gain": [r.to_list() if r else None for r in getattr(p, "pass_gain", [])],
         "endurance_pass": getattr(p, "endurance_pass", 0),

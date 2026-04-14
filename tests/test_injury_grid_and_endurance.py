@@ -316,3 +316,136 @@ class TestEndurancePenaltyRun:
         rn, violation = game._apply_endurance_penalty_to_run(rb, 5)
         assert rn == 5
         assert violation is None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 3 — WR/TE Endurance on Pass Plays
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestPassEnduranceCheck:
+    """Verify endurance check works for WR and TE as pass targets."""
+
+    def test_wr_endurance_pass_violation(self):
+        """WR with endurance_pass=1 targeted on consecutive play → violation."""
+        game = _build_game()
+        wr = _make_wr("SpeedWR", endurance=1)
+        wr.endurance_pass = 1
+        game.state.last_ball_carrier = "SpeedWR"
+        assert game._check_endurance_violation(wr, for_pass=True) == "endurance_1"
+
+    def test_wr_endurance_pass_ok(self):
+        """WR with endurance_pass=1 rested one play → no violation."""
+        game = _build_game()
+        wr = _make_wr("SpeedWR", endurance=1)
+        wr.endurance_pass = 1
+        game.state.last_ball_carrier = "OtherPlayer"
+        assert game._check_endurance_violation(wr, for_pass=True) is None
+
+    def test_wr_endurance_0_unlimited(self):
+        """WR with endurance_pass=0 can be targeted every play."""
+        game = _build_game()
+        wr = _make_wr("StarWR", endurance=0)
+        wr.endurance_pass = 0
+        game.state.last_ball_carrier = "StarWR"
+        game.state.endurance_used_this_drive.add("StarWR")
+        game.state.endurance_used_this_quarter.add("StarWR")
+        assert game._check_endurance_violation(wr, for_pass=True) is None
+
+    def test_te_endurance_3_drive_violation(self):
+        """TE with endurance_pass=3 used already this drive → violation."""
+        game = _build_game()
+        te = _make_te("BlockTE", endurance=3)
+        te.endurance_pass = 3
+        game.state.endurance_used_this_drive.add("BlockTE")
+        assert game._check_endurance_violation(te, for_pass=True) == "endurance_3"
+
+    def test_te_endurance_3_new_drive_ok(self):
+        """TE with endurance_pass=3 not yet used this drive → ok."""
+        game = _build_game()
+        te = _make_te("BlockTE", endurance=3)
+        te.endurance_pass = 3
+        assert game._check_endurance_violation(te, for_pass=True) is None
+
+    def test_rushing_endurance_used_for_runs(self):
+        """Run play should use endurance_rushing (not endurance_pass)."""
+        game = _build_game()
+        rb = _make_rb("DualRB", endurance=0)
+        rb.endurance_pass = 2  # More restrictive for passes
+        # RB used last play
+        game.state.last_ball_carrier = "DualRB"
+        # For runs: endurance_rushing=0 → unlimited
+        assert game._check_endurance_violation(rb, for_pass=False) is None
+        # For passes: endurance_pass=2 → violation (used 1 play ago)
+        assert game._check_endurance_violation(rb, for_pass=True) == "endurance_2"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 4 — Safety Scoring
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestSafety:
+    """Verify safety scoring when ball carrier is in own end zone."""
+
+    def test_safety_awards_2_points_to_defense(self):
+        game = _build_game()
+        game.state.possession = "home"
+        game.state.yard_line = 2
+        game.state.down = 1
+        game.state.distance = 10
+
+        # Advance -5 yards (loss), pushing below goal line
+        game._advance_down(-5)
+
+        # Defense (away team) should get 2 points
+        assert game.state.score.away == 2
+        assert game.state.score.home == 0
+
+    def test_safety_resets_to_20(self):
+        game = _build_game()
+        game.state.possession = "home"
+        game.state.yard_line = 2
+
+        game._advance_down(-5)
+
+        # After safety, ball at own 20
+        assert game.state.yard_line == 20
+
+    def test_safety_logged(self):
+        game = _build_game()
+        game.state.possession = "away"
+        game.state.yard_line = 1
+
+        game._advance_down(-3)
+
+        # Home team (defense) gets 2 points
+        assert game.state.score.home == 2
+        assert any("SAFETY" in entry for entry in game.state.play_log)
+
+    def test_no_safety_at_1(self):
+        """Ball at 1, loss of 0 = no safety."""
+        game = _build_game()
+        game.state.possession = "home"
+        game.state.yard_line = 1
+        game.state.distance = 10
+        game.state.down = 1
+
+        result = game._advance_down(0)
+        # No safety, normal play
+        assert game.state.score.away == 0
+        assert game.state.yard_line == 1
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 5 — Touchback Yard Line Fix
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestTouchbackYardLine:
+    """Verify touchbacks use 20-yard line per 5E rules."""
+
+    def test_kickoff_touchback_at_20(self):
+        game = _build_game()
+        from engine.play_resolver import PlayResult
+        touchback = PlayResult("KICKOFF", 0, "TOUCHBACK",
+                               description="Touchback")
+        yl = game._kickoff_yard_line(touchback)
+        assert yl == 20
