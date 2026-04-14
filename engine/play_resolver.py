@@ -3097,6 +3097,7 @@ class PlayResolver:
                 elif 'L' not in assignments.values():
                     assignments[s.player_name] = 'L'
             elif 'L' not in assignments.values():
+                # FS/SS whose preferred box is taken — fall back to DB slot (L)
                 assignments[s.player_name] = 'L'
         for db in (other_dbs + cbs[2:]):
             if db.player_name in assignments:

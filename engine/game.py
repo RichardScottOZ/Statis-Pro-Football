@@ -111,6 +111,7 @@ class Game:
     def __init__(self, home_team: Team, away_team: Team,
                  solitaire_home: bool = True, solitaire_away: bool = True,
                  seed: Optional[int] = None, **kwargs):
+        # **kwargs absorbs deprecated params (e.g. use_5e) for backward compat
         self.home_team = home_team
         self.away_team = away_team
         # 5E Solitaire: remove 1 Z card when both teams are AI-controlled
