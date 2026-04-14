@@ -419,6 +419,25 @@ class Game:
                                      defensive_play=defensive_play,
                                      blitz_players=blitz_players)
 
+    def _pick_receiver(self, play_call: PlayCall, player_name: Optional[str] = None) -> Optional[PlayerCard]:
+        team = self.get_offense_team()
+
+        # If specific player requested, try to find them among all eligible receivers
+        if player_name:
+            for p in team.roster.wrs + team.roster.tes + team.roster.rbs:
+                if p.player_name == player_name:
+                    return None if self._is_player_unavailable(p) else p
+
+        if "DEEP" in play_call.direction:
+            receivers = [p for p in team.roster.wrs if not self._is_player_unavailable(p)]
+            return random.choice(receivers) if receivers else None
+
+        options = [
+            p for p in (team.roster.wrs + team.roster.tes)
+            if not self._is_player_unavailable(p)
+        ]
+        return random.choice(options) if options else None
+
     def _execute_field_goal(self) -> PlayResult:
         kicker = self.get_kicker()
         distance = (100 - self.state.yard_line) + 17

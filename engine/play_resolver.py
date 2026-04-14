@@ -557,7 +557,12 @@ class PlayResolver:
                 def_fumble_adj, is_home,
             )
         else:
-            result = self.resolve_kickoff()
+            # No table data — default to touchback
+            result = PlayResult(
+                play_type="KICKOFF", yards_gained=0,
+                result="TOUCHBACK",
+                description="Kickoff - touchback, ball at 25-yard line",
+            )
         if result.result == "TOUCHBACK":
             # Squib kicks are less likely to reach end zone
             result.result = "RETURN"

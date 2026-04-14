@@ -185,7 +185,7 @@ class SolitaireAI:
                      fac_card: Optional[FACCard] = None) -> PlayCall:
         """Call a play using the FAC card's SOLO field (5th-edition mode).
 
-        Falls back to the legacy AI if the card has no SOLO data.
+        Falls back to situation-based AI if the card has no SOLO data.
         """
         # Use SOLO field if available
         if fac_card is not None and not fac_card.is_z_card:
@@ -198,22 +198,34 @@ class SolitaireAI:
                     if situation.down == 4:
                         return self._call_fourth_down(situation)
                     if situation.time_remaining <= 120 and situation.score_diff < 0:
-                        return self._call_two_minute_drill(situation,
-                                                           self.dice.roll())
+                        # Two-minute drill: pass-heavy
+                        if situation.distance > 10:
+                            return PlayCall("LONG_PASS", "SHOTGUN",
+                                            random.choice(["DEEP_LEFT", "DEEP_RIGHT"]),
+                                            "Need big play in 2-minute drill")
+                        return PlayCall("SHORT_PASS", "SHOTGUN",
+                                        random.choice(["LEFT", "RIGHT", "MIDDLE"]),
+                                        "Moving chains in 2-minute drill")
                     if situation.time_remaining <= 60 and situation.score_diff > 0:
                         return PlayCall("KNEEL", "UNDER_CENTER", "MIDDLE",
                                         "Running out the clock")
                     return play_call
 
-        # Fall back to legacy call_play
-        return self.call_play(situation)
+        # Fallback: situation-based play calling
+        if situation.down == 4:
+            return self._call_fourth_down(situation)
+        if situation.time_remaining <= 60 and situation.score_diff > 0:
+            return PlayCall("KNEEL", "UNDER_CENTER", "MIDDLE", "Running out the clock")
+        # Default run play
+        direction = random.choice(["LEFT", "RIGHT", "MIDDLE"])
+        return PlayCall("RUN", "I_FORM", direction, "Default play")
 
     def call_defense_5e(self, situation: GameSituation,
                         fac_card: Optional[FACCard] = None) -> str:
         """Call a defensive formation using 5th-edition SOLO field.
 
         If the SOLO field indicates BLZ, use a blitz formation.
-        Falls back to legacy defense calling otherwise.
+        Falls back to situation-based defense calling otherwise.
         """
         if fac_card is not None and not fac_card.is_z_card:
             solo_dict = fac_card.parse_solo()
@@ -223,7 +235,15 @@ class SolitaireAI:
                 if code == "BLZ":
                     return random.choice(["4_3_BLITZ", "NICKEL_BLITZ"])
 
-        return self.call_defense(situation)
+        # Situation-based defense
+        if situation.down == 3 and situation.distance >= 7:
+            return "NICKEL_ZONE"
+        elif situation.down == 3:
+            return "NICKEL_COVER2"
+        elif situation.distance <= 2:
+            return "GOAL_LINE"
+        else:
+            return random.choice(["4_3", "3_4", "4_3_COVER2", "3_4_ZONE"])
 
     # ── 5th-Edition proper play / strategy calling ───────────────────
 
