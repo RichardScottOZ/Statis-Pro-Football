@@ -63,7 +63,6 @@ class TestOpeningKickoffReturnTD:
 
         # Patch _do_kickoff: first call returns TD, second returns normal
         call_count = [0]
-        original_init = Game.__init__
 
         def mock_do_kickoff(self_game, kicking_team, receiving_team):
             call_count[0] += 1

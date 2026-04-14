@@ -547,9 +547,13 @@ export function LetterBoards({ personnel, defenseFormation }: LetterBoardsProps)
                 const le = wrs[0] ?? null;
                 const re = tes[0] ?? wrs[1] ?? null;
                 const fl = tes.length > 0 ? (wrs[1] ?? null) : (wrs[2] ?? null);
-                if (le) onField.push(le);
-                if (re && re !== le) onField.push(re);
-                if (fl && fl !== le && fl !== re) onField.push(fl);
+                const seen = new Set<string>();
+                for (const p of [le, re, fl]) {
+                  if (p && !seen.has(p.name)) {
+                    seen.add(p.name);
+                    onField.push(p);
+                  }
+                }
                 return onField.map((r, i) => (
                   <MiniCard key={`rec-${i}`} player={r} />
                 ));

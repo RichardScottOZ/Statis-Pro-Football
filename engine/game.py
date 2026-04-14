@@ -18,6 +18,14 @@ from .play_types import (
     PLAYER_INVOLVED_NAMES, LEGACY_FORMATION_TO_PLAY,
 )
 
+# Mapping from 5E OffensivePlay to FAC run direction for blocking matchup
+_OFFENSIVE_PLAY_TO_DIRECTION = {
+    OffensivePlay.RUNNING_SWEEP_LEFT: "SL",
+    OffensivePlay.RUNNING_SWEEP_RIGHT: "SR",
+    OffensivePlay.RUNNING_INSIDE_LEFT: "IL",
+    OffensivePlay.RUNNING_INSIDE_RIGHT: "IR",
+}
+
 
 class Quarter(int, Enum):
     Q1 = 1
@@ -770,12 +778,6 @@ class Game:
         # Synchronize play_call direction with 5E offensive play so the
         # display string ("Running Sweep Left") matches the actual FAC
         # direction used for blocking matchup resolution (SL/IL/SR/IR).
-        _OFFENSIVE_PLAY_TO_DIRECTION = {
-            OffensivePlay.RUNNING_SWEEP_LEFT: "SL",
-            OffensivePlay.RUNNING_SWEEP_RIGHT: "SR",
-            OffensivePlay.RUNNING_INSIDE_LEFT: "IL",
-            OffensivePlay.RUNNING_INSIDE_RIGHT: "IR",
-        }
         if off_play in _OFFENSIVE_PLAY_TO_DIRECTION and play_call.play_type == "RUN":
             play_call = PlayCall(
                 play_type=play_call.play_type,
