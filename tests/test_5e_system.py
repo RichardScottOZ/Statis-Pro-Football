@@ -819,6 +819,47 @@ class TestAuthenticPassResolution:
         )
         assert isinstance(result, PlayResult)
 
+    def test_no_td_from_own_territory(self):
+        """A short completion deep in own territory must never be a TD."""
+        # Simulate many completions from own 9-yard line
+        td_count = 0
+        for seed in range(500):
+            deck = FACDeck(seed=seed)
+            card = deck.draw_non_z()
+            result = self.resolver.resolve_pass_5e(
+                card, deck, self.qb, self.wr1, self.receivers, "SHORT",
+                yard_line=9,
+            )
+            if result.is_touchdown:
+                td_count += 1
+        # No completions of ~5-15 yards from the 9-yard line should be a TD
+        assert td_count == 0, f"Got {td_count} impossible TDs from own 9-yard line"
+
+    def test_td_when_pass_reaches_end_zone(self):
+        """Completion that reaches yard_line >= 100 should be a TD."""
+        td_found = False
+        for seed in range(500):
+            deck = FACDeck(seed=seed)
+            card = deck.draw_non_z()
+            result = self.resolver.resolve_pass_5e(
+                card, deck, self.qb, self.wr1, self.receivers, "SHORT",
+                yard_line=95,
+            )
+            if result.is_touchdown:
+                td_found = True
+                # Yards should be capped at distance to goal
+                assert result.yards_gained <= 5
+                break
+        assert td_found, "Expected at least one TD from the 95-yard line in 500 attempts"
+
+    def test_check_pass_td_at_goal_helper(self):
+        """Unit test the static helper method."""
+        assert self.resolver.check_pass_td_at_goal(95, 5) is True
+        assert self.resolver.check_pass_td_at_goal(95, 10) is True
+        assert self.resolver.check_pass_td_at_goal(9, 11) is False
+        assert self.resolver.check_pass_td_at_goal(50, 49) is False
+        assert self.resolver.check_pass_td_at_goal(50, 50) is True
+
 
 class TestAuthenticRunResolution:
     """Test run resolution with authentic 12-row rushing cards."""

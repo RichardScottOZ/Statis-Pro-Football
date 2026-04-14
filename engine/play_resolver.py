@@ -1929,7 +1929,7 @@ class PlayResolver:
                         yards = int(yards)
                     except (ValueError, TypeError):
                         yards = random.randint(5, 15)
-            is_td = random.random() < (0.06 if pass_type == "LONG" else 0.04)
+            is_td = self.check_pass_td_at_goal(yard_line, yards) if isinstance(yards, int) else False
         elif target_receiver.short_reception or target_receiver.long_reception:
             pn_str = str(pn)
             if pass_type == "LONG":
@@ -1955,18 +1955,23 @@ class PlayResolver:
                 is_td = rec_data.get("td", False)
             else:
                 yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
-                is_td = random.random() < 0.05
+                is_td = False
         else:
             yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
-            is_td = random.random() < 0.05
+            is_td = False
             log.append(f"[REC CARD] No receiver data, random yards={yards}")
 
         # NOTE: In authentic 5E rules, defense affects the Pass Number (PN)
         # via the covering defender's pass_defense_rating (already applied above),
         # NOT the reception yards.  The receiver card yards are used as-is.
 
-        if isinstance(yards, int) and yards >= 99:
-            is_td = True
+        # Validate TD against field position — only score if ball reaches end zone
+        if isinstance(yards, int):
+            if self.check_pass_td_at_goal(yard_line, yards):
+                is_td = True
+                yards = 100 - yard_line  # cap at goal line
+            else:
+                is_td = False
 
         if is_td:
             desc = f"{qb.player_name} completes to {target_receiver.player_name} for a TOUCHDOWN!"
