@@ -42,15 +42,12 @@ const RUN_DIRECTIONS = [
   { value: 'IR', label: 'Inside Right' },
   { value: 'SL', label: 'Sweep Left' },
   { value: 'SR', label: 'Sweep Right' },
-  { value: 'MIDDLE', label: 'Middle' },
 ];
 
 const PASS_DIRECTIONS = [
   { value: 'LEFT', label: 'Left' },
   { value: 'RIGHT', label: 'Right' },
   { value: 'MIDDLE', label: 'Middle' },
-  { value: 'DEEP_LEFT', label: 'Deep Left' },
-  { value: 'DEEP_RIGHT', label: 'Deep Right' },
 ];
 
 const FORMATIONS = [
