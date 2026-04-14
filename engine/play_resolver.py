@@ -35,7 +35,6 @@ import random
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 from .player_card import PlayerCard, RECEIVER_LETTERS
-from .fast_action_dice import DiceResult, PlayTendency
 from .fac_deck import FACCard, FACDeck
 from .charts import Charts
 from .fac_distributions import (
@@ -631,13 +630,14 @@ class PlayResolver:
         """Classify a FAC blocking matchup string into a matchup type.
 
         Returns one of:
-          "BK_VS_BOX"   — "BK vs F" style: blocking back vs. defensive box
-          "OL_VS_BOX"   — "CN vs C" / "LG vs B" style: OL vs. defensive box
-          "TWO_DEF_BOX" — "A + F" / "B + G" style: two single-letter defense boxes
-          "TWO_OL"      — "LG + LT" / "CN + LG" style: two offensive players
-          "OL_ONLY"     — "LG" / "CN" / "BK" / "LT" etc.: single OL, no specific box
-          "BREAK"       — breakaway run
-          "OTHER"       — unrecognised pattern
+          "BK_VS_BOX"     — "BK vs F" style: blocking back vs. defensive box (contest)
+          "OL_VS_BOX"     — "CN vs C" / "LG vs B" style: OL vs. defensive box (contest)
+          "SINGLE_DEF_BOX" — "A" / "C" style: single defensive box letter (defense only)
+          "TWO_DEF_BOX"   — "A + F" / "B + G" style: two defensive boxes (defense only)
+          "TWO_OL"        — "LG + LT" / "CN + LG" style: two offensive players (offense only)
+          "OL_ONLY"       — "LG" / "CN" / "BK" / "LT" etc.: single OL (offense only)
+          "BREAK"         — breakaway run
+          "OTHER"         — unrecognised pattern
         """
         m = matchup.strip()
         if m.upper() == "BREAK":
@@ -655,8 +655,53 @@ class PlayResolver:
                 return "TWO_OL"
         # Single uppercase letter = defensive box (A-O)
         if len(m) == 1 and m.isupper():
-            return "OL_VS_BOX"
+            return "SINGLE_DEF_BOX"
         return "OL_ONLY"
+
+    @staticmethod
+    def extract_ol_abbreviations(matchup: str) -> list:
+        """Extract 2-letter offensive player abbreviations from a matchup string.
+
+        Returns a list of offensive position abbreviations (e.g. CN, LG, BK).
+        Examples:
+          "BK"        → ["BK"]
+          "LG"        → ["LG"]
+          "CN + LG"   → ["CN", "LG"]
+          "LG vs B"   → ["LG"]
+          "BK vs G"   → ["BK"]
+          "A"         → []      (defensive box only)
+          "A + F"     → []      (defensive boxes only)
+        """
+        m = matchup.strip()
+        if " vs " in m:
+            off_part = m.split(" vs ")[0].strip()
+            if len(off_part) >= 2:
+                return [off_part]
+            return []
+        if " + " in m:
+            parts = [p.strip() for p in m.split(" + ")]
+            if len(parts) == 2:
+                # If all parts are single letters, these are defensive boxes
+                if all(len(p) == 1 and p.isupper() for p in parts):
+                    return []
+                return [p for p in parts if len(p) >= 2]
+            return []
+        # Single 2+ letter abbreviation = offensive player
+        if len(m) >= 2:
+            return [m]
+        return []
+
+    @staticmethod
+    def get_player_blocking_value(player: 'PlayerCard') -> int:
+        """Get the blocking value for a player in blocking matchups.
+
+        For OL: uses run_block_rating (the small-integer blocking grade).
+        For others (RB, TE, WR): uses blocks field.
+        """
+        rbr = getattr(player, 'run_block_rating', 0) or 0
+        if rbr > 0:
+            return rbr
+        return getattr(player, 'blocks', 0) or 0
 
     @staticmethod
     def extract_box_letters(matchup: str) -> list:
@@ -735,7 +780,12 @@ class PlayResolver:
                 def_fumble_adj, is_home,
             )
         else:
-            result = self.resolve_kickoff()
+            # No table data — default to touchback
+            result = PlayResult(
+                play_type="KICKOFF", yards_gained=0,
+                result="TOUCHBACK",
+                description="Kickoff - touchback, ball at 20-yard line",
+            )
         if result.result == "TOUCHBACK":
             # Squib kicks are less likely to reach end zone
             result.result = "RETURN"
@@ -919,6 +969,8 @@ class PlayResolver:
         """Calculate field goal distance: (100 - yard_line) + 17."""
         return (100 - yard_line) + 17
 
+    # ── Run resolution (5E) ──────────────────────────────────────────
+
     # ── Field goal ───────────────────────────────────────────────────
 
     def resolve_field_goal(self, distance: int, kicker: PlayerCard) -> PlayResult:
@@ -945,242 +997,11 @@ class PlayResolver:
             description=f"{kicker.player_name} {'makes' if made else 'misses'} {distance}-yard field goal",
         )
 
-    # ── Punt (slot-based) ────────────────────────────────────────────
+    # ── Punt (5E) ─────────────────────────────────────────────────────
+    # Legacy slot-based punt resolution has been removed.
+    # 5E punts use resolve_punt_return_5e() via game.py's _execute_punt_5e().
 
-    @staticmethod
-    def _returner_modifier(returner: Optional[PlayerCard], kind: str) -> int:
-        if returner is None:
-            return 0
-        stats = returner.stats_summary or {}
-        grade_bonus = {"A+": 2, "A": 2, "B": 1, "C": 0, "D": -1}.get(returner.overall_grade, 0)
-        # Use rushing efficiency and receiving explosiveness as lightweight return proxies.
-        ypc_bonus = round(
-            (float(stats.get("ypc", PlayResolver.RETURN_BASE_YPC)) - PlayResolver.RETURN_BASE_YPC)
-            * (PlayResolver.PUNT_RETURN_YPC_WEIGHT if kind == "PR" else PlayResolver.KICK_RETURN_YPC_WEIGHT)
-        )
-        rec_bonus = round(
-            (float(stats.get("avg_yards", PlayResolver.RETURN_BASE_REC_YARDS)) - PlayResolver.RETURN_BASE_REC_YARDS)
-            / (PlayResolver.PUNT_RETURN_REC_DIVISOR if kind == "PR" else PlayResolver.KICK_RETURN_REC_DIVISOR)
-        )
-        position_bonus = 1 if returner.position.upper() in ("RB", "WR", "CB", "S", "SS", "FS", "DB") else 0
-        modifier = grade_bonus + ypc_bonus + rec_bonus + position_bonus
-        return max(-2, min(6, modifier))
-
-    def resolve_punt(self, punter: PlayerCard,
-                     dice: Optional[DiceResult] = None,
-                     returner: Optional[PlayerCard] = None,
-                     deck: Optional[FACDeck] = None,
-                     punt_returners: Optional[List[Dict[str, Any]]] = None,
-                     punt_return_table: Optional[List[List[Any]]] = None,
-                     yard_line: int = 30,
-                     fumbles_lost_max: int = 21,
-                     def_fumble_adj: int = 0,
-                     is_home: bool = False) -> PlayResult:
-        log: List[str] = []
-        returner_name = returner.player_name if returner else "unknown"
-        returner_grade = getattr(returner, 'overall_grade', '?') if returner else '?'
-        has_5e_return = (deck is not None and punt_returners and punt_return_table)
-
-        # Use slot-based punt column if available
-        if punter.punt_column and dice is not None:
-            slot = dice.slot
-            punt_data = punter.punt_column.get(
-                slot, {"result": "NORMAL", "yards": int(punter.avg_distance), "td": False},
-            )
-            punt_result = punt_data.get("result", "NORMAL")
-
-            if punt_result == "INSIDE_20":
-                distance = random.randint(
-                    max(30, int(punter.avg_distance - 5)),
-                    int(punter.avg_distance + 5),
-                )
-                log.append(f"[PR] Punt by {punter.player_name}: {distance} yards, downed inside 20 (no return)")
-                r = PlayResult(
-                    play_type="PUNT",
-                    yards_gained=distance,
-                    result="PUNT",
-                    description=f"{punter.player_name} punts {distance} yards, downed inside the 20",
-                )
-                r.debug_log = log
-                return r
-            elif punt_result == "TOUCHBACK":
-                distance = random.randint(
-                    int(punter.avg_distance + 5),
-                    int(punter.avg_distance + 15),
-                )
-                log.append(f"[PR] Punt by {punter.player_name}: {distance} yards, touchback (no return)")
-                r = PlayResult(
-                    play_type="PUNT",
-                    yards_gained=distance,
-                    result="PUNT",
-                    description=f"{punter.player_name} punts {distance} yards, touchback",
-                )
-                r.debug_log = log
-                return r
-            else:
-                distance = punt_data.get("yards", int(punter.avg_distance))
-                fair_catch = Charts.check_fair_catch(punter.punt_return_pct)
-
-                if fair_catch:
-                    return_yards = 0
-                    log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
-                    log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
-                    log.append(f"[PR] Fair catch by {returner_name}")
-                    desc = f"{punter.player_name} punts {distance} yards"
-                    desc += f", fair catch by {returner.player_name}" if returner else ", fair catch"
-                elif has_5e_return:
-                    # 5E: use team card PR return tables — read directly, no modifiers
-                    pr_info = self.resolve_punt_return_5e(
-                        deck, punt_returners, punt_return_table,
-                        punt_distance=distance, yard_line=yard_line,
-                        fumbles_lost_max=fumbles_lost_max,
-                        def_fumble_adj=def_fumble_adj,
-                        is_home=is_home,
-                    )
-                    log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
-                    log.extend(pr_info["log_entries"])
-
-                    if pr_info["is_td"]:
-                        r = PlayResult(
-                            play_type="PUNT", yards_gained=distance,
-                            result="PR_TD", is_touchdown=True,
-                            description=(f"{punter.player_name} punts {distance} yards, "
-                                         f"{pr_info['returner_name']} returns it for a TOUCHDOWN!"),
-                            rusher=pr_info["returner_name"],
-                        )
-                        r.debug_log = log
-                        return r
-                    if pr_info["is_fumble"]:
-                        return_yards = pr_info["return_yards"]
-                        desc = (f"{punter.player_name} punts {distance} yards, "
-                                f"{pr_info['returner_name']} returns {return_yards} yards — FUMBLE! "
-                                f"{'Defense recovers!' if pr_info['fumble_lost'] else 'Offense recovers.'}")
-                        r = PlayResult(
-                            play_type="PUNT", yards_gained=distance - return_yards,
-                            result="FUMBLE",
-                            turnover=pr_info["fumble_lost"],
-                            turnover_type="FUMBLE" if pr_info["fumble_lost"] else None,
-                            description=desc,
-                            rusher=pr_info["returner_name"],
-                        )
-                        r.debug_log = log
-                        return r
-
-                    return_yards = pr_info["return_yards"]
-                    desc = f"{punter.player_name} punts {distance} yards"
-                    if return_yards > 0:
-                        desc += f", {pr_info['returner_name']} returns it {return_yards} yards"
-                else:
-                    # Legacy fallback: base return + modifier
-                    base_return = Charts.roll_punt_return()
-                    modifier = self._returner_modifier(returner, "PR")
-                    return_yards = max(0, base_return + modifier)
-                    log.append(f"[PR] Punt by {punter.player_name}: {distance} yards")
-                    log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
-                    log.append(f"[PR] Base return yards={base_return}, returner modifier={modifier:+d}, return yards={return_yards}")
-                    desc = f"{punter.player_name} punts {distance} yards"
-                    if return_yards > 0:
-                        desc += (
-                            f", {returner.player_name} returns it {return_yards} yards"
-                            if returner else f", returned {return_yards} yards"
-                        )
-
-                log.append(f"[PR] Net punt: {distance - return_yards} yards")
-                r = PlayResult(
-                    play_type="PUNT",
-                    yards_gained=distance - return_yards,
-                    result="PUNT",
-                    description=desc,
-                )
-                r.debug_log = log
-                return r
-
-        # Legacy fallback for punters without a punt_column
-        avg = punter.avg_distance
-        variance = random.gauss(0, 5)
-        distance = max(20, int(avg + variance))
-
-        inside_20 = random.random() < punter.inside_20_rate
-        fair_catch = Charts.check_fair_catch(punter.punt_return_pct)
-
-        if inside_20:
-            return_yards = 0
-            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
-            log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
-            log.append(f"[PR] Downed inside 20 (no return)")
-            desc = f"{punter.player_name} punts {distance} yards, downed inside the 20"
-        elif fair_catch:
-            return_yards = 0
-            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
-            log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
-            log.append(f"[PR] Fair catch by {returner_name}")
-            desc = f"{punter.player_name} punts {distance} yards"
-            desc += f", fair catch by {returner.player_name}" if returner else ", fair catch"
-        elif has_5e_return:
-            # 5E: use team card PR return tables — read directly, no modifiers
-            pr_info = self.resolve_punt_return_5e(
-                deck, punt_returners, punt_return_table,
-                punt_distance=distance, yard_line=yard_line,
-                fumbles_lost_max=fumbles_lost_max,
-                def_fumble_adj=def_fumble_adj,
-                is_home=is_home,
-            )
-            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy punt, 5E return)")
-            log.extend(pr_info["log_entries"])
-
-            if pr_info["is_td"]:
-                r = PlayResult(
-                    play_type="PUNT", yards_gained=distance,
-                    result="PR_TD", is_touchdown=True,
-                    description=(f"{punter.player_name} punts {distance} yards, "
-                                 f"{pr_info['returner_name']} returns it for a TOUCHDOWN!"),
-                    rusher=pr_info["returner_name"],
-                )
-                r.debug_log = log
-                return r
-            if pr_info["is_fumble"]:
-                return_yards = pr_info["return_yards"]
-                desc = (f"{punter.player_name} punts {distance} yards, "
-                        f"{pr_info['returner_name']} returns {return_yards} yards — FUMBLE! "
-                        f"{'Defense recovers!' if pr_info['fumble_lost'] else 'Offense recovers.'}")
-                r = PlayResult(
-                    play_type="PUNT", yards_gained=distance - return_yards,
-                    result="FUMBLE",
-                    turnover=pr_info["fumble_lost"],
-                    turnover_type="FUMBLE" if pr_info["fumble_lost"] else None,
-                    description=desc,
-                    rusher=pr_info["returner_name"],
-                )
-                r.debug_log = log
-                return r
-
-            return_yards = pr_info["return_yards"]
-            desc = f"{punter.player_name} punts {distance} yards"
-            if return_yards > 0:
-                desc += f", {pr_info['returner_name']} returns it {return_yards} yards"
-        else:
-            # Legacy fallback: base return + modifier
-            base_return = Charts.roll_punt_return()
-            modifier = self._returner_modifier(returner, "PR")
-            return_yards = max(0, base_return + modifier)
-            log.append(f"[PR] Punt by {punter.player_name}: {distance} yards (legacy)")
-            log.append(f"[PR] Returner: {returner_name} (grade {returner_grade})")
-            log.append(f"[PR] Base return yards={base_return}, returner modifier={modifier:+d}, return yards={return_yards}")
-            desc = f"{punter.player_name} punts {distance} yards"
-            if return_yards > 0 and returner:
-                desc += f", {returner.player_name} returns it {return_yards} yards"
-
-        log.append(f"[PR] Net punt: {distance - return_yards} yards")
-        r = PlayResult(
-            play_type="PUNT",
-            yards_gained=distance - return_yards,
-            result="PUNT",
-            description=desc,
-        )
-        r.debug_log = log
-        return r
-
-    # ── XP / 2PT / Kickoff ──────────────────────────────────────────
+    # ── XP / Kickoff ────────────────────────────────────────────────
 
     def resolve_xp(self, kicker: PlayerCard) -> PlayResult:
         made = random.random() < kicker.xp_rate
@@ -1190,47 +1011,6 @@ class PlayResolver:
             result="XP_GOOD" if made else "XP_NO_GOOD",
             description=f"Extra point {'good' if made else 'no good'}!",
         )
-
-    def resolve_two_point(self, dice: DiceResult, qb: PlayerCard,
-                          receiver: PlayerCard) -> PlayResult:
-        success = random.random() < 0.48
-        return PlayResult(
-            play_type="2PT",
-            yards_gained=0,
-            result="2PT_GOOD" if success else "2PT_NO_GOOD",
-            description=f"2-point conversion {'successful!' if success else 'fails.'}",
-        )
-
-    def resolve_kickoff(self, returner: Optional[PlayerCard] = None) -> PlayResult:
-        """Legacy kickoff resolution (non-5E). Kept for backward compatibility."""
-        log: List[str] = []
-        if Charts.is_kickoff_touchback():
-            log.append("[KR] Kickoff result: touchback, ball at 25-yard line")
-            r = PlayResult(
-                play_type="KICKOFF",
-                yards_gained=0,
-                result="TOUCHBACK",
-                description="Kickoff - touchback, ball at 25-yard line",
-            )
-            r.debug_log = log
-            return r
-        base_return = Charts.roll_kick_return()
-        final_position = max(1, min(99, base_return))
-        returner_name = returner.player_name if returner else "unknown"
-        returner_grade = getattr(returner, 'overall_grade', '?') if returner else '?'
-        log.append(f"[KR] Returner: {returner_name} (grade {returner_grade})")
-        log.append(f"[KR] Return yard line={final_position}")
-        r = PlayResult(
-            play_type="KICKOFF",
-            yards_gained=final_position,
-            result="RETURN",
-            description=(
-                f"Kickoff to {returner.player_name}, returned to the {final_position}-yard line"
-                if returner else f"Kickoff returned to the {final_position}-yard line"
-            ),
-        )
-        r.debug_log = log
-        return r
 
     # ── 5E Authentic Kickoff Resolution ────────────────────────────────
 
@@ -1290,11 +1070,15 @@ class PlayResolver:
 
         # Look up the kickoff table (12 entries, index 0 = RN 1)
         if not kickoff_table or len(kickoff_table) < 12:
-            # Fallback to legacy if no table
-            log.append("[KO] No kickoff table data — using legacy kickoff")
-            result = self.resolve_kickoff()
-            result.debug_log = log + result.debug_log
-            return result
+            # No table data — default to touchback
+            log.append("[KO] No kickoff table data — default touchback")
+            r = PlayResult(
+                play_type="KICKOFF", yards_gained=0,
+                result="TOUCHBACK",
+                description="Kickoff - touchback, ball at 20-yard line",
+            )
+            r.debug_log = log
+            return r
 
         ko_entry = kickoff_table[ko_rn - 1]
         log.append(f"[KO] Kickoff table RN {ko_rn} → {ko_entry}")
@@ -1324,13 +1108,13 @@ class PlayResolver:
         # ── Touchback results ────────────────────────────────────────
         ko_upper = ko_entry.upper()
         if ko_upper.startswith("TB"):
-            yard_line = 25
+            yard_line = 20
             modifier_str = ""
             if "(" in ko_entry and ")" in ko_entry:
                 inner = ko_entry[ko_entry.index("(") + 1:ko_entry.index(")")]
                 try:
                     tb_adj = int(inner)
-                    yard_line = max(1, 25 + tb_adj)
+                    yard_line = max(1, 20 + tb_adj)
                     modifier_str = f" (adj {tb_adj:+d})"
                 except ValueError:
                     pass
@@ -1670,6 +1454,7 @@ class PlayResolver:
                         pass_type: str = "SHORT",
                         defense_coverage: int = 0,
                         defense_pass_rush: int = 0,
+                        offense_pass_block: int = 0,
                         defense_formation: str = "4_3",
                         is_blitz_tendency: bool = False,
                         defensive_strategy: str = "NONE",
@@ -1680,7 +1465,9 @@ class PlayResolver:
                         yard_line: int = 25,
                         defenders_by_box: Optional[Dict[str, PlayerCard]] = None,
                         backs_blocking: Optional[List[int]] = None,
-                        double_coverage_defender_box: Optional[str] = None) -> PlayResult:
+                        double_coverage_defender_box: Optional[str] = None,
+                        blitzer_names: Optional[List[str]] = None,
+                        endurance_modifier: int = 0) -> PlayResult:
         """Resolve a pass play using 5th-edition FAC card mechanics.
 
         Parameters
@@ -1724,6 +1511,12 @@ class PlayResolver:
             The original box letter of the defender who moved to double
             cover a receiver.  If an INC→INT check fires in this box,
             the interception is suppressed because the defender is away.
+        blitzer_names : Optional[List[str]]
+            Names of blitzing players for debug logging.
+        endurance_modifier : int
+            Completion range modifier from receiver endurance violation.
+            Only applied when the FAC's actual receiver matches the
+            intended target; ignored on check-offs per 5E rules.
         """
         # ── Handle Z card ────────────────────────────────────────────
         if fac_card.is_z_card:
@@ -1732,20 +1525,24 @@ class PlayResolver:
             fac_card = deck.draw_non_z()
             return self._resolve_pass_inner_5e(
                 fac_card, deck, qb, receiver, receivers, pass_type,
-                defense_coverage, defense_pass_rush, defense_formation,
+                defense_coverage, defense_pass_rush, offense_pass_block,
+                defense_formation,
                 is_blitz_tendency, z_event, defensive_strategy, defenders,
                 two_minute_offense, completion_modifier, defensive_play_5e,
                 yard_line, defenders_by_box, backs_blocking,
-                double_coverage_defender_box,
+                double_coverage_defender_box, blitzer_names,
+                endurance_modifier,
             )
 
         return self._resolve_pass_inner_5e(
             fac_card, deck, qb, receiver, receivers, pass_type,
-            defense_coverage, defense_pass_rush, defense_formation,
+            defense_coverage, defense_pass_rush, offense_pass_block,
+            defense_formation,
             is_blitz_tendency, None, defensive_strategy, defenders,
             two_minute_offense, completion_modifier, defensive_play_5e,
             yard_line, defenders_by_box, backs_blocking,
-            double_coverage_defender_box,
+            double_coverage_defender_box, blitzer_names,
+            endurance_modifier,
         )
 
     def _resolve_pass_inner_5e(self, fac_card: FACCard, deck: FACDeck,
@@ -1754,6 +1551,7 @@ class PlayResolver:
                                pass_type: str,
                                defense_coverage: int,
                                defense_pass_rush: int,
+                               offense_pass_block: int,
                                defense_formation: str,
                                is_blitz_tendency: bool,
                                z_event: Optional[Dict[str, Any]],
@@ -1765,7 +1563,9 @@ class PlayResolver:
                                yard_line: int = 25,
                                defenders_by_box: Optional[Dict[str, PlayerCard]] = None,
                                backs_blocking: Optional[List[int]] = None,
-                               double_coverage_defender_box: Optional[str] = None) -> PlayResult:
+                               double_coverage_defender_box: Optional[str] = None,
+                               blitzer_names: Optional[List[str]] = None,
+                               endurance_modifier: int = 0) -> PlayResult:
         """Inner pass resolution after Z-card handling.
 
         Authentic 5E resolution:
@@ -1805,25 +1605,41 @@ class PlayResolver:
                 pn = fac_card.pass_num_int or random.randint(1, 48)
                 log.append(f"[P.RUSH] PN={pn}, QB pass_rush ranges: sack_max={qb.pass_rush.sack_max}, runs_max={qb.pass_rush.runs_max}, com_max={qb.pass_rush.com_max}")
 
-                # Rule 2: Apply pass rush modifier to sack range
+                # Per 5E rules Steps 1-3:
+                # defense_pass_rush = sum of DL Row 1 pass rush values
+                #   (+ blitzing player PR=2 each, already included by caller)
+                # offense_pass_block = sum of OL pass blocking values
+                # Modifier = (def_sum - off_sum) * 2, applied to sack range
                 pr_modifier = self.calculate_pass_rush_modifier(
-                    defense_pass_rush, getattr(qb, 'pass_block_rating', 0)
+                    defense_pass_rush, offense_pass_block
                 )
-                adjusted_pn = pn
+                log.append(f"[P.RUSH] DL pass rush sum={defense_pass_rush}, OL pass block sum={offense_pass_block}")
+
+                # Per 5E rules: modifier adjusts the QB's Sack Range on
+                # his Pass Rush line — NOT the Pass Number.  The
+                # Completion Range is never altered (Step 4 note).
+                # When sack range shrinks, former sack numbers become
+                # RUNS (Step 4 note).
+                adjusted_sack_max = qb.pass_rush.sack_max + pr_modifier
+                # Sack range can't go below 0 or above runs_max
+                adjusted_sack_max = max(0, min(qb.pass_rush.runs_max, adjusted_sack_max))
                 if pr_modifier != 0:
-                    adjusted_pn = max(1, min(48, pn - pr_modifier))
-                    log.append(f"[P.RUSH] PR modifier={pr_modifier}, adjusted PN={adjusted_pn}")
+                    log.append(f"[P.RUSH] PR modifier={pr_modifier}, adjusted sack range: {qb.pass_rush.sack_max}→{adjusted_sack_max}")
 
-                # Rule 3: Blitz pass rush override
-                if is_blitz_tendency:
-                    blitz_pr = self.get_blitz_pass_rush_value()
-                    blitz_mod = self.calculate_pass_rush_modifier(
-                        blitz_pr * 2, getattr(qb, 'pass_block_rating', 0)
-                    )
-                    adjusted_pn = max(1, min(48, pn - blitz_mod))
-                    log.append(f"[P.RUSH] Blitz override: blitz_mod={blitz_mod}, adjusted PN={adjusted_pn}")
+                # Log blitzer info when blitz forced the pass rush
+                if blitzer_names:
+                    log.append(f"[P.RUSH] Blitzing ({len(blitzer_names)}): {', '.join(blitzer_names)}")
 
-                pr_result = qb.pass_rush.resolve(adjusted_pn)
+                # Resolve using adjusted sack range; runs_max and com_max
+                # are unchanged per the rules.
+                if pn <= adjusted_sack_max:
+                    pr_result = "SACK"
+                elif pn <= qb.pass_rush.runs_max:
+                    pr_result = "RUNS"
+                elif pn <= qb.pass_rush.com_max:
+                    pr_result = "COM"
+                else:
+                    pr_result = "INC"
                 log.append(f"[P.RUSH] Result = {pr_result}")
                 if pr_result == "SACK":
                     loss = -(pn // 3 + 1)
@@ -1859,7 +1675,9 @@ class PlayResolver:
                                 yards = random.randint(1, 8)
                     else:
                         yards = random.randint(-2, 5)
-                    is_td = random.random() < 0.03
+                    is_td = self.check_pass_td_at_goal(yard_line, yards)
+                    if is_td:
+                        yards = 100 - yard_line
                     log.append(f"[SCRAMBLE] Yards={yards}, TD={is_td}")
                     r = PlayResult(
                         play_type="PASS", yards_gained=yards,
@@ -2027,9 +1845,23 @@ class PlayResolver:
         # Apply completion_modifier (e.g. from play-action strategy).
         # Positive = wider COM range = subtract from PN (more likely to complete).
         # Negative = narrower COM range = add to PN (less likely to complete).
+        #
+        # 5E Endurance rule: if the FAC redirected the pass to a different
+        # receiver (check-off), ignore the endurance penalty for this play.
+        applied_endurance_mod = 0
+        if endurance_modifier != 0:
+            is_checkoff = (actual_receiver is not None
+                           and actual_receiver.player_name != receiver.player_name)
+            if is_checkoff:
+                log.append(f"[ENDURANCE] Check-off to {actual_receiver.player_name} — "
+                           f"endurance penalty ignored per 5E rules")
+            else:
+                applied_endurance_mod = endurance_modifier
+                log.append(f"[ENDURANCE] Receiver endurance penalty: "
+                           f"{applied_endurance_mod:+d} to completion range")
         total_completion_mod = (completion_modifier + defense_play_comp_mod
                                 + backs_blocking_mod + empty_box_mod
-                                + pass_defense_mod)
+                                + pass_defense_mod + applied_endurance_mod)
         completion_adjustment = -total_completion_mod  # +5 completion → -5 to PN
 
         # Coverage penalties (double/triple/two-minute) are always <= 0.
@@ -2288,7 +2120,7 @@ class PlayResolver:
                         yards = int(yards)
                     except (ValueError, TypeError):
                         yards = random.randint(5, 15)
-            is_td = random.random() < (0.06 if pass_type == "LONG" else 0.04)
+            is_td = self.check_pass_td_at_goal(yard_line, yards) if isinstance(yards, int) else False
         elif target_receiver.short_reception or target_receiver.long_reception:
             pn_str = str(pn)
             if pass_type == "LONG":
@@ -2314,18 +2146,23 @@ class PlayResolver:
                 is_td = rec_data.get("td", False)
             else:
                 yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
-                is_td = random.random() < 0.05
+                is_td = False
         else:
             yards = random.randint(5, 15) if pass_type != "LONG" else random.randint(15, 30)
-            is_td = random.random() < 0.05
+            is_td = False
             log.append(f"[REC CARD] No receiver data, random yards={yards}")
 
         # NOTE: In authentic 5E rules, defense affects the Pass Number (PN)
         # via the covering defender's pass_defense_rating (already applied above),
         # NOT the reception yards.  The receiver card yards are used as-is.
 
-        if isinstance(yards, int) and yards >= 99:
-            is_td = True
+        # Validate TD against field position — only score if ball reaches end zone
+        if isinstance(yards, int):
+            if self.check_pass_td_at_goal(yard_line, yards):
+                is_td = True
+                yards = 100 - yard_line  # cap at goal line
+            else:
+                is_td = False
 
         if is_td:
             desc = f"{qb.player_name} completes to {target_receiver.player_name} for a TOUCHDOWN!"
@@ -2445,7 +2282,9 @@ class PlayResolver:
             )
 
         yards = max(0, int(base_yards * multiplier))
-        is_td = random.random() < 0.03
+        is_td = self.check_pass_td_at_goal(yard_line, yards)
+        if is_td:
+            yards = 100 - yard_line
 
         if is_td:
             desc = f"{qb.player_name} screen pass to {actual_receiver.player_name} for a TOUCHDOWN!"
@@ -2473,9 +2312,11 @@ class PlayResolver:
                        both_boxes_empty: bool = False,
                        blocking_back_bv: int = 0,
                        defenders_by_box: Optional[Dict[str, PlayerCard]] = None,
+                       offensive_blockers_by_pos: Optional[Dict[str, 'PlayerCard']] = None,
                        fumbles_lost_max: int = 21,
                        def_fumble_adj: int = 0,
-                       is_home: bool = False) -> PlayResult:
+                       is_home: bool = False,
+                       yard_line: int = 25) -> PlayResult:
         """Resolve a run play using 5th-edition FAC card mechanics.
 
         Authentic resolution:
@@ -2483,11 +2324,14 @@ class PlayResolver:
           2. Apply Run Number modifiers (defense play + extra)
           3. Look up rusher's Rushing column row → N/SG/LG values
           4. Use N (Normal) column as base yards
-          5. Modify by blocking matchup per empty-box rules:
-             - "BK vs Box" + empty box  → add blocking_back_bv (BK rating)
-             - "OL vs Box" + empty box  → base yards + 2
-             - "Box + Box" + both empty → base yards + 2
-             - otherwise               → base yards − defender's TV (tackle_rating)
+          5. Apply blocking matchup modifier (3 categories):
+             a. OFFENSE ONLY (OL_ONLY / TWO_OL): ADD offensive blocker(s)
+                blocking value to yardage.
+             b. DEFENSE ONLY (SINGLE_DEF_BOX / TWO_DEF_BOX): SUBTRACT
+                defender(s) tackle value from yardage; +2 if box empty.
+             c. CONTEST (BK_VS_BOX / OL_VS_BOX): Compare total BV vs TV.
+                If BV > TV → add BV; tie → 0; TV > BV → subtract TV.
+                Empty box → +2.
 
         Parameters
         ----------
@@ -2504,25 +2348,22 @@ class PlayResolver:
             Additional Run Number modifier (e.g. from Draw strategy).
             Positive = worse for offense (higher RN), negative = better.
         defensive_play_5e : Optional[DefensivePlay]
-            The 5E defensive play call. When provided, uses proper
-            get_run_number_modifier_5e() for RN modifier (+4 key on BC,
-            +2 no key, 0 wrong key/pass/prevent/blitz).
-        box_is_empty : bool
-            True when the specific defensive box named in the FAC matchup
-            has no defender assigned (empty box rule).
-        both_boxes_empty : bool
-            True when the FAC matchup is "Box + Box" and BOTH boxes are
-            unoccupied (two-box empty rule: +2 yards).
+            The 5E defensive play call.
+        defenders_by_box : dict
+            Mapping of box letter (A-O) → defensive PlayerCard.
+        offensive_blockers_by_pos : dict
+            Mapping of position abbreviation (CN, LG, BK, etc.) → offensive
+            PlayerCard.  Used to look up blocking values for OL_ONLY, TWO_OL,
+            and contest matchups.
         blocking_back_bv : int
-            Blocking value of the BK for "BK vs Box" matchups.  Only used
-            when box_is_empty is True.
+            Legacy blocking back BV (kept for backward compat; prefer
+            offensive_blockers_by_pos["BK"]).
         fumbles_lost_max : int
-            Team's Fumbles Lost upper range (e.g. 21 means PN 1-21 = lost).
-            From offensive team's card.
+            Team's Fumbles Lost upper range.
         def_fumble_adj : int
-            Defensive team's Fumble Adjustment (positive = more fumbles lost).
+            Defensive team's Fumble Adjustment.
         is_home : bool
-            Whether the ball carrier's team is the home team (home gets bonus).
+            Whether the ball carrier's team is the home team.
         """
         z_event = None
         log: List[str] = []
@@ -2573,72 +2414,83 @@ class PlayResolver:
             )
         if run_num is not None:
             run_num = max(1, min(12, run_num + rn_modifier))
-            log.append(f"[RN] Original RN={original_rn}, adjusted RN={run_num} (clamped 1-12)")
+            log.append(f"[RN] Original RN={original_rn}, adjusted RN={run_num}")
         else:
             log.append(f"[RN] No run number (Z card fallback)")
 
         rn_str = str(run_num) if run_num is not None else "1"
         used_run_num = run_num if run_num is not None else 1
 
-        # Effective run-stop: use individual defender's tackle_rating from box
-        # Extract box letter(s) from the FAC card blocking matchup
+        # ── Compute defensive TV and offensive BV from matchup ────────
         box_letters = self.extract_box_letters(blocking_matchup)
-        defender_tv = None
-        defender_name = None
+        ol_abbrevs = self.extract_ol_abbreviations(blocking_matchup)
+
+        # Total defensive tackle value from targeted box(es)
+        total_def_tv = 0
+        def_names = []
+        any_box_occupied = False
+        all_boxes_empty = False
 
         if defenders_by_box and box_letters:
-            # Look up the specific defender in the targeted box
+            occupied_count = 0
             for bl in box_letters:
                 defender = defenders_by_box.get(bl)
                 if defender is not None:
-                    defender_tv = getattr(defender, 'tackle_rating', 0)
-                    defender_name = getattr(defender, 'player_name', '?')
+                    tv = getattr(defender, 'tackle_rating', 0) or 0
                     # Out-of-position penalty: DB in wrong box → −1 TV
                     oop_penalty = self.check_out_of_position_penalty(defender, bl)
                     if oop_penalty != 0:
-                        defender_tv = max(0, defender_tv + oop_penalty)
+                        tv = max(0, tv + oop_penalty)
                         log.append(
-                            f"[OOP] {defender_name} playing out of position "
+                            f"[OOP] {defender.player_name} playing out of position "
                             f"in box {bl}: TV adjusted by {oop_penalty}"
                         )
-                    break
-
-            if defender_tv is None:
-                # Box is empty — check empty-box conditions
-                if len(box_letters) == 1:
-                    box_is_empty = True
-                elif len(box_letters) == 2:
-                    both_empty = all(
-                        defenders_by_box.get(bl) is None for bl in box_letters
-                    )
-                    both_boxes_empty = both_empty
-
-        # Formation modifier applies to the defender's TV
-        from .fac_distributions import get_formation_modifier
-        form_mod = get_formation_modifier(defense_formation).get("run_stop", 0)
-
-        if defender_tv is not None:
-            eff_run_stop = defender_tv + form_mod
-            log.append(
-                f"[DEF] Tackle value: defender={defender_name} in box {box_letters[0]}, "
-                f"TV={defender_tv}, formation_mod={form_mod:+d}, effective={eff_run_stop}"
-            )
-        elif defense_run_stop <= 10:
-            # Already on 5E small scale (legacy fallback)
-            eff_run_stop = effective_run_stop(defense_run_stop, defense_formation)
-            log.append(
-                f"[DEF] Run-stop (fallback): base={defense_run_stop}, "
-                f"formation={defense_formation}, effective={eff_run_stop}"
-            )
+                    total_def_tv += tv
+                    def_names.append(f"{defender.player_name}(box={bl},TV={tv})")
+                    occupied_count += 1
+            any_box_occupied = occupied_count > 0
+            all_boxes_empty = occupied_count == 0
+            if any_box_occupied:
+                log.append(
+                    f"[DEF] Defenders targeted: {', '.join(def_names)}, "
+                    f"total TV={total_def_tv}"
+                )
+            else:
+                log.append(
+                    f"[DEF] All targeted boxes {box_letters} empty"
+                )
+        elif box_letters:
+            all_boxes_empty = True
+            log.append(f"[DEF] No defenders_by_box available, boxes {box_letters} treated as empty")
         else:
-            # Legacy 0-100 scale — convert to 5E scale before use
-            from .card_generator import _legacy_to_5e_tackle
-            converted = _legacy_to_5e_tackle(defense_run_stop)
-            eff_run_stop = converted + form_mod
-            log.append(
-                f"[DEF] Run-stop (legacy→5E): raw={defense_run_stop}, "
-                f"converted={converted}, formation_mod={form_mod:+d}, effective={eff_run_stop}"
-            )
+            log.append(f"[DEF] No defensive box in matchup")
+
+        # Total offensive blocking value from OL/BK abbreviations
+        total_off_bv = 0
+        off_names = []
+        if offensive_blockers_by_pos and ol_abbrevs:
+            for abbrev in ol_abbrevs:
+                blocker = offensive_blockers_by_pos.get(abbrev)
+                if blocker is not None:
+                    bv = self.get_player_blocking_value(blocker)
+                    total_off_bv += bv
+                    off_names.append(f"{blocker.player_name}({abbrev},BV={bv})")
+            if off_names:
+                log.append(
+                    f"[OFF] Blockers: {', '.join(off_names)}, total BV={total_off_bv}"
+                )
+        elif ol_abbrevs:
+            # Fallback: use blocking_back_bv for BK if no personnel dict
+            if "BK" in ol_abbrevs and blocking_back_bv:
+                total_off_bv = blocking_back_bv
+                log.append(f"[OFF] BK blocking back BV={blocking_back_bv} (fallback)")
+
+        # Update empty-box flags for backward compatibility
+        if all_boxes_empty and box_letters:
+            if len(box_letters) == 1:
+                box_is_empty = True
+            elif len(box_letters) == 2:
+                both_boxes_empty = True
 
         # ── Try authentic 12-row rushing first ───────────────────────
         if rusher.rushing and rusher.has_rushing():
@@ -2651,7 +2503,9 @@ class PlayResolver:
 
             # ── Check blocking matchup FIRST to detect BREAKAWAY ─────
             matchup_type = self.classify_blocking_matchup(blocking_matchup)
-            log.append(f"[BLOCK] Matchup type: {matchup_type} ({blocking_matchup!r}), box_empty={box_is_empty}, both_empty={both_boxes_empty}")
+            log.append(f"[BLOCK] Matchup type: {matchup_type} ({blocking_matchup!r}), "
+                       f"total_off_bv={total_off_bv}, total_def_tv={total_def_tv}, "
+                       f"box_empty={box_is_empty}, both_empty={both_boxes_empty}")
 
             if matchup_type == "BREAK":
                 # BREAKAWAY: use the LG (Long Gain) column, no run-stop
@@ -2661,7 +2515,9 @@ class PlayResolver:
                         yards = int(yards)
                     except (ValueError, TypeError):
                         yards = random.randint(15, 40)
-                is_td = random.random() < 0.2
+                is_td = (yard_line + yards) >= 100
+                if is_td:
+                    yards = 100 - yard_line
                 log.append(
                     f"[BREAKAWAY] FAC blocking matchup is BREAK → "
                     f"using LG column={row.v3}, yards={yards}, TD={is_td}"
@@ -2686,7 +2542,9 @@ class PlayResolver:
                 if yards == "Sg":
                     # Special gain (breakaway from card)
                     yards = row.v3 if isinstance(row.v3, int) else random.randint(15, 40)
-                    is_td = random.random() < 0.2
+                    is_td = (yard_line + yards) >= 100
+                    if is_td:
+                        yards = 100 - yard_line
                     log.append(f"[RUSH] Special Gain (breakaway)! Yards={yards}, TD={is_td}")
                     desc = f"{rusher.player_name} breaks free for {yards} yards!"
                     if is_td:
@@ -2708,26 +2566,69 @@ class PlayResolver:
                         yards = random.randint(1, 5)
 
             base_yards = yards
-            # ── Empty-box rules (5E rushing section) ─────────────────
 
-            if matchup_type == "BK_VS_BOX" and box_is_empty:
-                # BK vs empty box: add BK's BV only (no +2 bonus)
-                yards = base_yards + blocking_back_bv
-                log.append(f"[BLOCK] BK vs empty box → +{blocking_back_bv} (BK BV): {base_yards} + {blocking_back_bv} = {yards}")
-            elif matchup_type == "OL_VS_BOX" and box_is_empty:
-                # OL vs empty letter box: RN result + 2 yards
-                yards = base_yards + 2
-                log.append(f"[BLOCK] OL vs empty box → +2: {base_yards} + 2 = {yards}")
-            elif matchup_type == "TWO_DEF_BOX" and both_boxes_empty:
-                # Two defensive boxes, both empty: RN result + 2 yards
-                yards = base_yards + 2
-                log.append(f"[BLOCK] Two def boxes both empty → +2: {base_yards} + 2 = {yards}")
-            else:
-                # Normal occupied-box case: subtract TV (eff_run_stop)
-                yards = int(base_yards - eff_run_stop)
+            # ── Blocking matchup resolution (3 categories) ───────────
+            if matchup_type in ("OL_ONLY", "TWO_OL"):
+                # OFFENSE ONLY: add offensive blocker(s) blocking value
+                yards = base_yards + total_off_bv
                 log.append(
-                    f"[YARDS] Base yards={base_yards}, "
-                    f"minus run-stop ({eff_run_stop}) = {yards}"
+                    f"[BLOCK] Offense only ({blocking_matchup}): "
+                    f"base={base_yards} + BV={total_off_bv} = {yards}"
+                )
+
+            elif matchup_type in ("SINGLE_DEF_BOX", "TWO_DEF_BOX"):
+                # DEFENSE ONLY: subtract defender(s) tackle value
+                if all_boxes_empty:
+                    yards = base_yards + 2
+                    log.append(
+                        f"[BLOCK] Empty box ({blocking_matchup}): "
+                        f"base={base_yards} + 2 = {yards}"
+                    )
+                else:
+                    yards = base_yards - total_def_tv
+                    log.append(
+                        f"[BLOCK] Defense box ({blocking_matchup}): "
+                        f"base={base_yards} - TV={total_def_tv} = {yards}"
+                    )
+
+            elif matchup_type in ("BK_VS_BOX", "OL_VS_BOX"):
+                # CONTEST: compare offense BV vs defense TV
+                if all_boxes_empty:
+                    # Empty box rule: +2
+                    yards = base_yards + 2
+                    log.append(
+                        f"[BLOCK] Contest empty box ({blocking_matchup}): "
+                        f"base={base_yards} + 2 = {yards}"
+                    )
+                elif total_off_bv > total_def_tv:
+                    # Offense wins: add BV
+                    yards = base_yards + total_off_bv
+                    log.append(
+                        f"[BLOCK] Contest offense wins ({blocking_matchup}): "
+                        f"BV={total_off_bv} > TV={total_def_tv}, "
+                        f"base={base_yards} + {total_off_bv} = {yards}"
+                    )
+                elif total_off_bv == total_def_tv:
+                    # Tie: no modification
+                    yards = base_yards
+                    log.append(
+                        f"[BLOCK] Contest tie ({blocking_matchup}): "
+                        f"BV={total_off_bv} == TV={total_def_tv}, "
+                        f"base={base_yards} + 0 = {yards}"
+                    )
+                else:
+                    # Defense wins: subtract TV
+                    yards = base_yards - total_def_tv
+                    log.append(
+                        f"[BLOCK] Contest defense wins ({blocking_matchup}): "
+                        f"TV={total_def_tv} > BV={total_off_bv}, "
+                        f"base={base_yards} - {total_def_tv} = {yards}"
+                    )
+            else:
+                # Unrecognised matchup: use base yards only
+                log.append(
+                    f"[BLOCK] Unrecognised matchup ({blocking_matchup}): "
+                    f"using base yards={base_yards}"
                 )
 
             # 5E Rule: Inside run max loss = 3 yards; no limit on sweep
@@ -2753,7 +2654,9 @@ class PlayResolver:
                 r.debug_log = log
                 return r
 
-            is_td = random.random() < 0.03
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
 
             # Check Z RES on the card for additional effects (authentic path)
             z_res_info = fac_card.parse_z_result()
@@ -2808,206 +2711,14 @@ class PlayResolver:
             r.debug_log = log
             return r
 
-        # ── Legacy: fall back to old slot-based columns ──────────────
-        log.append(f"[LEGACY] No 12-row rushing data; using legacy slot columns")
-        if play_direction in ("SL", "SR"):
-            column = rusher.sweep if rusher.sweep else rusher.outside_run
-        elif play_direction in ("IL", "IR"):
-            column = rusher.inside_run
-        elif play_direction in ("LEFT", "MIDDLE"):
-            column = rusher.inside_run
-        else:
-            column = rusher.outside_run
-
-        if not column:
-            yards = random.choices([-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-                                   weights=[2, 3, 5, 8, 10, 12, 12, 10, 8, 5, 3])[0]
-            log.append(f"[LEGACY] No column data; random yards={yards}")
-            r = PlayResult(
-                play_type="RUN", yards_gained=yards, result="GAIN",
-                description=f"{rusher.player_name} runs for {yards} yards",
-                rusher=rusher.player_name, z_card_event=z_event,
-                run_number_used=used_run_num,
-            )
-            r.debug_log = log
-            return r
-
-        play_data = column.get(rn_str, {"result": "GAIN", "yards": 2, "td": False})
-        result_type = play_data.get("result", "GAIN")
-        yards = play_data.get("yards", 0)
-        is_td = play_data.get("td", False)
-        log.append(f"[LEGACY] Column lookup RN={rn_str}: result={result_type}, yards={yards}, TD={is_td}")
-
-        # Check for BREAK (breakaway) blocking matchup FIRST
-        legacy_matchup_type = self.classify_blocking_matchup(blocking_matchup)
-        if legacy_matchup_type == "BREAK":
-            # BREAKAWAY from FAC blocking matchup — big play, no run-stop
-            is_td = random.random() < 0.2
-            log.append(f"[BREAKAWAY] FAC blocking matchup is BREAK → yards={yards}, TD={is_td}")
-            desc = f"{rusher.player_name} breaks free for {yards} yards!"
-            if is_td:
-                desc += " TOUCHDOWN!"
-            r = PlayResult(
-                play_type="RUN", yards_gained=yards,
-                result="TD" if is_td else "GAIN",
-                is_touchdown=is_td,
-                description=desc,
-                rusher=rusher.player_name, z_card_event=z_event,
-                run_number_used=used_run_num,
-            )
-            r.debug_log = log
-            return r
-
-        # Defense run-stop modifier (no artificial floor/clamping)
-        if result_type in ("GAIN", "BREAKAWAY"):
-            base_yards = yards
-            if legacy_matchup_type == "BK_VS_BOX" and box_is_empty:
-                yards = base_yards + blocking_back_bv
-                log.append(f"[LEGACY] BK vs empty box → +{blocking_back_bv}: {base_yards} + {blocking_back_bv} = {yards}")
-            elif legacy_matchup_type == "OL_VS_BOX" and box_is_empty:
-                yards = base_yards + 2
-                log.append(f"[LEGACY] OL vs empty box → +2: {base_yards} + 2 = {yards}")
-            elif legacy_matchup_type == "TWO_DEF_BOX" and both_boxes_empty:
-                yards = base_yards + 2
-                log.append(f"[LEGACY] Two def boxes both empty → +2: {base_yards} + 2 = {yards}")
-            else:
-                yards = int(yards - eff_run_stop)
-                log.append(f"[LEGACY] Run-stop applied: {base_yards} - {eff_run_stop} = {yards}")
-
-        # ── Out of bounds ────────────────────────────────────────────
-        if is_oob:
-            log.append(f"[OOB] Runner out of bounds ({play_direction})")
-            desc = f"{rusher.player_name} runs {play_direction} for {yards} yards, out of bounds"
-            r = PlayResult(
-                play_type="RUN", yards_gained=yards,
-                result="OOB", out_of_bounds=True,
-                description=desc, rusher=rusher.player_name,
-                z_card_event=z_event,
-                run_number_used=used_run_num,
-            )
-            r.debug_log = log
-            return r
-
-        # ── Fumble ───────────────────────────────────────────────────
-        if result_type == "FUMBLE":
-            # 5E: Draw a new FAC for Pass Number to determine fumble recovery
-            fumble_fac = deck.draw()
-            if fumble_fac.is_z_card:
-                fumble_fac = deck.draw_non_z()
-            fumble_pn = fumble_fac.pass_num_int or random.randint(1, 48)
-            fumble_lost = PlayResolver.resolve_fumble_with_team_rating(
-                fumble_pn, fumbles_lost_max, def_fumble_adj, is_home,
-            )
-            is_turnover = fumble_lost
-            recovery = "DEFENSE" if fumble_lost else "OFFENSE"
-            fumble_yards, fumble_td = Charts.roll_fumble_return()
-
-            adjusted_max = max(0, min(48, fumbles_lost_max + def_fumble_adj - (1 if is_home else 0)))
-            log.append(f"[FUMBLE] {rusher.player_name} fumbles!")
-            log.append(f"[FUMBLE] FAC drawn for recovery: Card #{fumble_fac.card_number}, PN={fumble_pn}")
-            log.append(f"[FUMBLE] Team fumbles_lost_max={fumbles_lost_max}, def_fumble_adj={def_fumble_adj}, "
-                        f"home={is_home} → adjusted range 1-{adjusted_max}")
-            log.append(f"[FUMBLE] PN {fumble_pn} {'in' if fumble_lost else 'outside'} range 1-{adjusted_max} "
-                        f"→ Recovery={recovery}")
-            if is_turnover:
-                log.append(f"[FUMBLE] Defense recovers! Return yards={fumble_yards}, TD={fumble_td}")
-            else:
-                log.append(f"[FUMBLE] Offense recovers.")
-
-            if is_turnover and fumble_td:
-                r = PlayResult(
-                    play_type="RUN", yards_gained=-fumble_yards,
-                    result="FUMBLE_TD", is_touchdown=False,
-                    turnover=True, turnover_type="FUMBLE",
-                    description=f"{rusher.player_name} fumbles! Returned for TD!",
-                    rusher=rusher.player_name, z_card_event=z_event,
-                    run_number_used=used_run_num,
-                )
-                r.debug_log = log
-                return r
-            r = PlayResult(
-                play_type="RUN", yards_gained=yards,
-                result="FUMBLE", turnover=is_turnover,
-                turnover_type="FUMBLE" if is_turnover else None,
-                description=(
-                    f"{rusher.player_name} fumbles! "
-                    f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
-                ),
-                rusher=rusher.player_name, z_card_event=z_event,
-                run_number_used=used_run_num,
-            )
-            r.debug_log = log
-            return r
-
-        # ── Breakaway ────────────────────────────────────────────────
-        if result_type == "BREAKAWAY":
-            is_td = is_td or random.random() < 0.2
-            log.append(f"[BREAKAWAY] yards={yards}, TD={is_td}")
-            desc = f"{rusher.player_name} breaks free for {yards} yards!"
-            if is_td:
-                desc += " TOUCHDOWN!"
-            r = PlayResult(
-                play_type="RUN", yards_gained=yards,
-                result="TD" if is_td else "GAIN",
-                is_touchdown=is_td,
-                description=desc,
-                rusher=rusher.player_name, z_card_event=z_event,
-                run_number_used=used_run_num,
-            )
-            r.debug_log = log
-            return r
-
-        # ── Normal gain ──────────────────────────────────────────────
-        # Check Z RES on the card for additional effects
-        z_res_info = fac_card.parse_z_result()
-        if z_res_info["type"] == "FUMBLE" and random.random() < 0.5:
-            # 5E: Draw FAC for Pass Number to determine fumble recovery
-            fumble_fac = deck.draw()
-            if fumble_fac.is_z_card:
-                fumble_fac = deck.draw_non_z()
-            fumble_pn = fumble_fac.pass_num_int or random.randint(1, 48)
-            fumble_lost = PlayResolver.resolve_fumble_with_team_rating(
-                fumble_pn, fumbles_lost_max, def_fumble_adj, is_home,
-            )
-            is_turnover = fumble_lost
-            recovery = "DEFENSE" if fumble_lost else "OFFENSE"
-
-            adjusted_max = max(0, min(48, fumbles_lost_max + def_fumble_adj - (1 if is_home else 0)))
-            log.append(f"[FUMBLE] Z-result fumble triggered for {rusher.player_name}")
-            log.append(f"[FUMBLE] FAC drawn for recovery: Card #{fumble_fac.card_number}, PN={fumble_pn}")
-            log.append(f"[FUMBLE] Team fumbles_lost_max={fumbles_lost_max}, def_fumble_adj={def_fumble_adj}, "
-                        f"home={is_home} → adjusted range 1-{adjusted_max}")
-            log.append(f"[FUMBLE] PN {fumble_pn} {'in' if fumble_lost else 'outside'} range 1-{adjusted_max} "
-                        f"→ Recovery={recovery}")
-
-            r = PlayResult(
-                play_type="RUN", yards_gained=yards,
-                result="FUMBLE", turnover=is_turnover,
-                turnover_type="FUMBLE" if is_turnover else None,
-                description=(
-                    f"{rusher.player_name} fumbles at the end of the run! "
-                    f"{'Defense recovers!' if is_turnover else 'Offense recovers.'}"
-                ),
-                rusher=rusher.player_name, z_card_event=z_event,
-                run_number_used=used_run_num,
-            )
-            r.debug_log = log
-            return r
-
-        desc = f"{rusher.player_name} runs {play_direction}"
-        if is_td:
-            desc += " for a TOUCHDOWN!"
-        else:
-            desc += f" for {yards} yard{'s' if yards != 1 else ''}"
-        log.append(f"[RESULT] Final: {yards} yards, TD={is_td}")
-
+        # No 12-row rushing data — generic fallback
+        yards = random.choices([-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+                               weights=[2, 3, 5, 8, 10, 12, 12, 10, 8, 5, 3])[0]
+        log.append(f"[RUN] No rushing card data for {rusher.player_name}; fallback yards={yards}")
         r = PlayResult(
-            play_type="RUN", yards_gained=yards,
-            result="TD" if is_td else "GAIN",
-            is_touchdown=is_td,
-            description=desc,
-            rusher=rusher.player_name,
-            z_card_event=z_event,
+            play_type="RUN", yards_gained=yards, result="GAIN",
+            description=f"{rusher.player_name} runs for {yards} yards",
+            rusher=rusher.player_name, z_card_event=z_event,
             run_number_used=used_run_num,
         )
         r.debug_log = log
@@ -3295,7 +3006,8 @@ class PlayResolver:
 
     def resolve_fake_field_goal(self, deck: FACDeck,
                                 qb_or_holder: PlayerCard,
-                                minutes_remaining: float = 3.0) -> PlayResult:
+                                minutes_remaining: float = 3.0,
+                                yard_line: int = 25) -> PlayResult:
         """Resolve a fake field goal attempt (Rule 21).
 
         - Draw FAC for RN: 1-6 = pass/run result, 7-9 = incomplete,
@@ -3321,7 +3033,9 @@ class PlayResolver:
         if 1 <= rn <= 6:
             # Pass/run result — scramble for yards
             yards = random.randint(2, 15)
-            is_td = random.random() < 0.08
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="PASS", yards_gained=yards,
                 result="TD" if is_td else "COMPLETE",
@@ -3351,7 +3065,8 @@ class PlayResolver:
     # ── Rule 22: Fake Punt ───────────────────────────────────────────
 
     def resolve_fake_punt(self, deck: FACDeck,
-                          punter: PlayerCard) -> PlayResult:
+                          punter: PlayerCard,
+                          yard_line: int = 25) -> PlayResult:
         """Resolve a fake punt attempt (Rule 22).
 
         - Draw FAC for RN: 1-5 = pass result, 6-12 = punter run results.
@@ -3371,7 +3086,9 @@ class PlayResolver:
         if 1 <= rn <= 5:
             # Pass result
             yards = random.randint(5, 20)
-            is_td = random.random() < 0.05
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="PASS", yards_gained=yards,
                 result="TD" if is_td else "COMPLETE",
@@ -3384,7 +3101,9 @@ class PlayResolver:
             # Daylight run: PN × 2 yards
             pn = fac_card.pass_num_int or random.randint(1, 48)
             yards = pn * 2
-            is_td = random.random() < 0.15
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="RUN", yards_gained=yards,
                 result="TD" if is_td else "GAIN",
@@ -3397,7 +3116,9 @@ class PlayResolver:
         else:
             # RN 6-11: punter run results
             yards = random.randint(-2, 8)
-            is_td = random.random() < 0.03
+            is_td = (yard_line + yards) >= 100
+            if is_td:
+                yards = 100 - yard_line
             return PlayResult(
                 play_type="RUN", yards_gained=yards,
                 result="TD" if is_td else "GAIN",
@@ -3810,11 +3531,20 @@ class PlayResolver:
             assignments[cbs[1].player_name] = 'O'
         for s in safeties:
             pos = getattr(s, 'position', '')
-            if pos in ('FS', 'S') and 'M' not in assignments.values():
+            if pos == 'FS' and 'M' not in assignments.values():
                 assignments[s.player_name] = 'M'
             elif pos == 'SS' and 'N' not in assignments.values():
                 assignments[s.player_name] = 'N'
+            elif pos == 'S':
+                # Generic safety: try FS (M) first, then SS (N), then L
+                if 'M' not in assignments.values():
+                    assignments[s.player_name] = 'M'
+                elif 'N' not in assignments.values():
+                    assignments[s.player_name] = 'N'
+                elif 'L' not in assignments.values():
+                    assignments[s.player_name] = 'L'
             elif 'L' not in assignments.values():
+                # FS/SS whose preferred box is taken — fall back to DB slot (L)
                 assignments[s.player_name] = 'L'
         for db in (other_dbs + cbs[2:]):
             if db.player_name in assignments:

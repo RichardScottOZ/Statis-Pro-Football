@@ -1,10 +1,9 @@
 """Core game state and logic for Statis Pro Football."""
 import random
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from enum import Enum
 
-from .fast_action_dice import FastActionDice, DiceResult, PlayTendency
 from .fac_deck import FACDeck, FACCard
 from .player_card import PlayerCard
 from .team import Team
@@ -18,6 +17,14 @@ from .play_types import (
     OFFENSIVE_STRATEGY_NAMES, DEFENSIVE_STRATEGY_NAMES,
     PLAYER_INVOLVED_NAMES, LEGACY_FORMATION_TO_PLAY,
 )
+
+# Mapping from 5E OffensivePlay to FAC run direction for blocking matchup
+_OFFENSIVE_PLAY_TO_DIRECTION = {
+    OffensivePlay.RUNNING_SWEEP_LEFT: "SL",
+    OffensivePlay.RUNNING_SWEEP_RIGHT: "SR",
+    OffensivePlay.RUNNING_INSIDE_LEFT: "IL",
+    OffensivePlay.RUNNING_INSIDE_RIGHT: "IR",
+}
 
 
 class Quarter(int, Enum):
@@ -67,6 +74,9 @@ class GameState:
     # 5E: Track last play's ball carrier for endurance
     last_ball_carrier: Optional[str] = None
     prev_ball_carrier: Optional[str] = None  # Two plays ago for endurance 2
+    # 5E: Endurance 3/4 usage tracking
+    endurance_used_this_drive: Set[str] = field(default_factory=set)
+    endurance_used_this_quarter: Set[str] = field(default_factory=set)
     # Penalty tracking: {team: count}
     penalties: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
     penalty_yards: Dict[str, int] = field(default_factory=lambda: {"home": 0, "away": 0})
@@ -106,19 +116,19 @@ class GameState:
 class Game:
     """Core game logic for Statis Pro Football (5th Edition).
 
-    Uses the FACDeck (109-card deck) for 5th-edition resolution.
+    Uses FACDeck (109-card deck) for all play resolution.
     """
 
     def __init__(self, home_team: Team, away_team: Team,
                  solitaire_home: bool = True, solitaire_away: bool = True,
-                 use_5e: bool = True, seed: Optional[int] = None):
+                 seed: Optional[int] = None, **kwargs):
+        # **kwargs absorbs deprecated params (e.g. use_5e) for backward compat
         self.home_team = home_team
         self.away_team = away_team
-        self.dice = FastActionDice()
         # 5E Solitaire: remove 1 Z card when both teams are AI-controlled
         is_solitaire = solitaire_home and solitaire_away
         self.deck = FACDeck(seed=seed, solitaire=is_solitaire)
-        self.use_5e = True  # Always use 5E rules
+
         self.resolver = PlayResolver()
         self.ai = SolitaireAI()
         self.solitaire_home = solitaire_home
@@ -149,9 +159,21 @@ class Game:
             kicking_team=self.get_defense_team(),
             receiving_team=self.get_offense_team(),
         )
-        start_yard = self._kickoff_yard_line(kickoff_result)
-        self.state.yard_line = start_yard
-        self.state.play_log.append(kickoff_result.description)
+        self._log_kickoff(kickoff_result)
+
+        if kickoff_result.is_touchdown or kickoff_result.result == "TD":
+            # Kickoff return TD: score, attempt XP, then kick off again
+            self._score_touchdown()
+            followup_kickoff = self._do_kickoff(
+                kicking_team=self.get_offense_team(),
+                receiving_team=self.get_defense_team(),
+            )
+            self._log_kickoff(followup_kickoff)
+            new_yl = self._kickoff_yard_line(followup_kickoff)
+            self._change_possession(new_yl)
+        else:
+            start_yard = self._kickoff_yard_line(kickoff_result)
+            self.state.yard_line = start_yard
 
     def get_offense_team(self) -> Team:
         return self.home_team if self.state.possession == "home" else self.away_team
@@ -231,6 +253,30 @@ class Game:
             return player
         return None
 
+    def _immediate_injury_swap(self, injured_player_name: str) -> None:
+        """Immediately swap an injured player out of the starter slot.
+
+        When a player is injured mid-play, the formation grid must reflect
+        the replacement at once — not on the next play.  Walk every position
+        list on *both* teams and, if the injured player sits in the starter
+        slot (index 0), promote the first healthy backup.
+        """
+        for team in (self.home_team, self.away_team):
+            pos_lists = [
+                (team.roster.qbs, "QB"),
+                (team.roster.rbs, "RB"),
+                (team.roster.wrs, "WR"),
+                (team.roster.tes, "TE"),
+                (team.roster.kickers, "K"),
+                (team.roster.punters, "P"),
+            ]
+            for players, pos in pos_lists:
+                if not players or players[0].player_name != injured_player_name:
+                    continue
+                # The injured player is currently in the starter slot — swap.
+                self._resolve_position_player(players, pos)
+                return  # each player belongs to one list only
+
     def validate_player_availability(self, player_name: str) -> PlayerCard:
         for player in self.get_offense_team().roster.all_players():
             if player.player_name == player_name:
@@ -238,6 +284,72 @@ class Game:
                     raise ValueError(f"{player_name} is injured and unavailable.")
                 return player
         raise ValueError(f"{player_name} is not on the current offense.")
+
+    # ── 5E Endurance ─────────────────────────────────────────────────
+
+    def _check_endurance_violation(self, player: PlayerCard,
+                                    for_pass: bool = False) -> Optional[str]:
+        """Check if directing a play at *player* violates endurance rules.
+
+        Returns a violation string (e.g. ``"endurance_1"``) or ``None``.
+
+        Applies to all skill positions (RB, WR, TE) per 5E rules.
+        On run plays the penalty is +2 to Run Number; on pass plays the
+        penalty is -5 to the QB's Completion Range.
+
+        Parameters
+        ----------
+        player : PlayerCard
+            The player the play is directed at.
+        for_pass : bool
+            If True, use the player's pass-receiving endurance
+            (``endurance_pass``) instead of rushing endurance.
+
+        5E endurance ratings:
+          0 → unlimited ("workhorse" / "D" grade)
+          1 → must rest 1 play between uses
+          2 → must rest 2 plays between uses
+          3 → once per drive / possession
+          4 → once per quarter
+        """
+        if for_pass:
+            endurance = getattr(player, "endurance_pass", None)
+        else:
+            endurance = getattr(player, "endurance_rushing", None)
+        if endurance is None or endurance == 0:
+            return None
+        name = player.player_name
+        if endurance == 1:
+            if self.state.last_ball_carrier == name:
+                return "endurance_1"
+        elif endurance == 2:
+            if name in (self.state.last_ball_carrier, self.state.prev_ball_carrier):
+                return "endurance_2"
+        elif endurance == 3:
+            if name in self.state.endurance_used_this_drive:
+                return "endurance_3"
+        elif endurance >= 4:
+            if name in self.state.endurance_used_this_quarter:
+                return "endurance_4"
+        return None
+
+    def _apply_endurance_penalty_to_run(self, player: PlayerCard,
+                                         run_number: int) -> tuple:
+        """If the ball carrier violates endurance, add +2 to run number.
+
+        Returns ``(adjusted_run_number, violation_string_or_None)``.
+        """
+        violation = self._check_endurance_violation(player)
+        if violation:
+            return run_number + 2, violation
+        return run_number, None
+
+    def _record_endurance_usage(self, player_name: Optional[str]) -> None:
+        """Record that *player_name* was the ball carrier this play."""
+        if not player_name:
+            return
+        self.state.endurance_used_this_drive.add(player_name)
+        self.state.endurance_used_this_quarter.add(player_name)
 
     def get_returner(self, team: Team, kind: str) -> Optional[PlayerCard]:
         return team.get_return_specialist(kind, unavailable_names=set(self.state.injuries))
@@ -255,10 +367,22 @@ class Game:
             is_home=rec_is_home,
         )
 
+    def _log_kickoff(self, kickoff: PlayResult, prefix: str = "") -> None:
+        """Append kickoff description *and* debug-log detail to the play log.
+
+        ``prefix`` is an optional label prepended to the first line
+        (e.g. "Second half kickoff: ").
+        """
+        desc = f"{prefix}{kickoff.description}" if prefix else kickoff.description
+        self.state.play_log.append(desc)
+        if kickoff.debug_log:
+            for entry in kickoff.debug_log:
+                self.state.play_log.append(f"    {entry}")
+
     def _kickoff_yard_line(self, kickoff: PlayResult) -> int:
         """Extract the starting yard line from a kickoff result."""
         if kickoff.result == "TOUCHBACK":
-            return max(1, kickoff.yards_gained) if kickoff.yards_gained else 25
+            return max(1, kickoff.yards_gained) if kickoff.yards_gained else 20
         if kickoff.result == "OOB":
             return 40
         return max(1, kickoff.yards_gained)
@@ -345,6 +469,11 @@ class Game:
         if self.state.yard_line >= 100:
             return True  # Touchdown
 
+        # Safety: ball goes behind own goal line (run loss, sack, etc.)
+        if self.state.yard_line <= 0:
+            self._score_safety()
+            return True
+
         if self.state.distance <= 0:
             self.state.down = 1
             self.state.distance = 10
@@ -364,6 +493,11 @@ class Game:
         self.state.yard_line = new_yard_line
         self.state.down = 1
         self.state.distance = 10
+        # Reset per-drive endurance tracking on possession change
+        self.state.endurance_used_this_drive = set()
+        # Also reset consecutive-play counters since it's a new possession
+        self.state.last_ball_carrier = None
+        self.state.prev_ball_carrier = None
 
     def _score_touchdown(self) -> None:
         if self.state.possession == "home":
@@ -388,6 +522,50 @@ class Game:
                 self.state.score.home += 1
             else:
                 self.state.score.away += 1
+
+    def _score_safety(self) -> None:
+        """Score a safety — 2 points for the defense.
+
+        The defensive team (opponent) gets 2 points, then the team that
+        conceded the safety kicks off from their own 20-yard line (a free
+        kick).  Because the kick comes from the 20 rather than the normal
+        35, any touchback on that kick is taken at the 15-yard line (5 yards
+        closer to the goal than a standard kickoff touchback).
+        """
+        # Award 2 points to the defensive team
+        if self.state.possession == "home":
+            self.state.score.away += 2
+        else:
+            self.state.score.home += 2
+        self.state.play_log.append(
+            f"SAFETY! 2 points for defense. "
+            f"Score: Away {self.state.score.away} - Home {self.state.score.home}"
+        )
+        # The team that conceded the safety kicks off from their own 20.
+        # At this point self.state.possession is still the *offense* that
+        # got tackled — that team is the kicker.
+        kicking_team = self.get_offense_team()
+        receiving_team = self.get_defense_team()
+        kickoff = self._do_kickoff(kicking_team, receiving_team)
+        self._log_kickoff(kickoff, prefix="Safety free kick from the 20: ")
+        new_yl = self._safety_kickoff_yard_line(kickoff)
+        # Possession transfers to the receiving team
+        self._change_possession(new_yl)
+
+    def _safety_kickoff_yard_line(self, kickoff: PlayResult) -> int:
+        """Starting yard line after a safety free kick.
+
+        The free kick is from the 20 instead of the normal 35, so all
+        results are shifted 15 yards back.  A plain touchback lands at
+        the 15 (rather than the normal 20).
+        """
+        if kickoff.result == "TOUCHBACK":
+            # Shift the normal touchback line back by 15 yards
+            normal_yl = max(1, kickoff.yards_gained) if kickoff.yards_gained else 20
+            return max(1, normal_yl - 5)
+        if kickoff.result == "OOB":
+            return max(1, 40 - 15)  # OOB spot shifts back 15 yards too
+        return max(1, kickoff.yards_gained)
 
     def execute_play(self, play_call: Optional[PlayCall] = None,
                      defense_formation: Optional[str] = None,
@@ -444,35 +622,92 @@ class Game:
                           description=f"{'Makes' if made else 'Misses'} {distance}-yard FG")
 
     def _execute_punt(self) -> PlayResult:
+        """Execute a punt using 5E FAC deck mechanics."""
         punter = self.get_punter()
-        punt_dice = self.dice.roll()
-        returner = self.get_returner(self.get_defense_team(), "PR")
-
-        # Get 5E team card data for punt return
-        defense_team = self.get_defense_team()
-        pr_returners = defense_team.get_punt_returners()
-        pr_table = defense_team.get_punt_return_table()
-        rec_is_home = (defense_team == self.home_team)
-
-        if punter:
-            result = self.resolver.resolve_punt(
-                punter, dice=punt_dice, returner=returner,
-                deck=self.deck,
-                punt_returners=pr_returners,
-                punt_return_table=pr_table,
-                yard_line=self.state.yard_line,
-                fumbles_lost_max=getattr(defense_team, 'fumbles_lost_max', 21),
-                def_fumble_adj=getattr(self.get_offense_team(), 'def_fumble_adj', 0),
-                is_home=rec_is_home,
-            )
-        else:
+        if not punter:
             dist = random.randint(38, 52)
             result = PlayResult("PUNT", dist - 8, "PUNT",
                                 description=f"Punt {dist} yards, returned 8 yards")
+            punt_distance = dist
+            new_yl = max(1, 100 - self.state.yard_line - punt_distance + random.randint(0, 10))
+            self._change_possession(new_yl)
+            return result
 
-        # Use actual punt result for field position
-        net_punt = result.yards_gained
-        new_yl = max(1, min(99, 100 - self.state.yard_line - net_punt))
+        # Draw FAC for RN to determine punt distance
+        fac_card = self.deck.draw()
+        if fac_card.is_z_card:
+            fac_card = self.deck.draw_non_z()
+        rn = fac_card.run_num_int or random.randint(1, 12)
+        rn = max(1, min(12, rn))
+
+        # RN 12 special handling
+        if rn == 12:
+            result = self.resolver.resolve_punt_rn12(punter, self.deck)
+            if result.result == "BLOCKED_PUNT":
+                new_yl = max(1, self.state.yard_line - 5)
+                self._change_possession(new_yl)
+                return result
+            elif result.result == "PENALTY":
+                self._apply_penalty(result.penalty)
+                return result
+            # Longest kick — treat as OOB punt
+            punt_distance = result.yards_gained
+            new_yl = max(1, 100 - self.state.yard_line - punt_distance)
+            self._change_possession(new_yl)
+            return result
+
+        # Look up punt distance from 5E table
+        punt_distance = Charts.get_punt_distance_5e(punter.avg_distance, rn)
+
+        # Check blocked punt
+        blocked_num = getattr(punter, 'blocked_punt_number', 0) or 0
+        if Charts.check_blocked_punt(blocked_num, rn):
+            result = PlayResult("PUNT", -5, "BLOCKED_PUNT",
+                                description=f"{punter.player_name}'s punt is BLOCKED!")
+            new_yl = max(1, self.state.yard_line - 5)
+            self._change_possession(new_yl)
+            return result
+
+        # Punt return using 5E team card tables
+        receiving_team = self.get_defense_team()
+        punt_returners = receiving_team.get_punt_returners()
+        punt_return_table = receiving_team.get_punt_return_table()
+        fumbles_lost_max = getattr(receiving_team, 'fumbles_lost_max', 21)
+        def_fumble_adj = getattr(self.get_offense_team(), 'def_fumble_adj', 0)
+        is_home = (self.state.possession != "home")  # receiving team is home?
+
+        return_info = self.resolver.resolve_punt_return_5e(
+            self.deck, punt_returners, punt_return_table,
+            punt_distance, self.state.yard_line,
+            fumbles_lost_max=fumbles_lost_max,
+            def_fumble_adj=def_fumble_adj,
+            is_home=is_home,
+        )
+
+        return_yards = return_info.get("return_yards", 0)
+        is_fair_catch = return_info.get("is_fair_catch", False)
+        is_td = return_info.get("is_td", False)
+        is_fumble = return_info.get("is_fumble", False)
+        fumble_lost = return_info.get("fumble_lost", False)
+        returner_name = return_info.get("returner_name", "unknown")
+
+        net_punt = punt_distance - return_yards
+        desc = f"{punter.player_name} punts {punt_distance} yards"
+        if is_fair_catch:
+            desc += f", fair catch by {returner_name}"
+        elif return_yards > 0:
+            desc += f", {returner_name} returns it {return_yards} yards"
+        if is_td:
+            desc += " TOUCHDOWN!"
+
+        result = PlayResult("PUNT", net_punt, "PUNT", description=desc)
+        result.debug_log = return_info.get("log_entries", [])
+
+        if is_fumble and fumble_lost:
+            result.turnover = True
+            result.turnover_type = "FUMBLE"
+
+        new_yl = max(1, 100 - self.state.yard_line - punt_distance + return_yards)
         self._change_possession(new_yl)
         return result
 
@@ -641,6 +876,8 @@ class Game:
 
         if self.state.time_remaining <= 0:
             self.state.quarter += 1
+            # Reset per-quarter endurance tracking
+            self.state.endurance_used_this_quarter = set()
             if self.state.quarter > 4:
                 if self.state.score.home == self.state.score.away:
                     self.state.quarter = 5
@@ -653,6 +890,7 @@ class Game:
                         f"GAME OVER! Final: Away {self.state.score.away} - Home {self.state.score.home}"
                     )
                     self.state.play_log.append(f"Winner: {winner} team")
+                    self.state.play_log.extend(self.format_boxscore())
             else:
                 self.state.time_remaining = 900
                 self.state.play_log.append(
@@ -666,7 +904,7 @@ class Game:
                         kicking_team=self.get_defense_team(),
                         receiving_team=self.get_offense_team(),
                     )
-                    self.state.play_log.append(f"Second half kickoff: {kickoff.description}")
+                    self._log_kickoff(kickoff, prefix="Second half kickoff: ")
                     new_yl = self._kickoff_yard_line(kickoff)
                     self.state.yard_line = new_yl
                     self.state.down = 1
@@ -675,20 +913,47 @@ class Game:
     # ── 5th-Edition FAC-card-based play execution ────────────────────
 
     def _get_all_receivers(self) -> list:
-        """Get on-field WR + TE receivers ordered by receiver letter.
+        """Get on-field receivers in formation position order.
 
-        In 5E, there are at most 5 receiver-eligible on-field positions:
-        FL(0), LE(1), RE(2), BK1(3), BK2(4).  We cap the list to 5 so
-        the FAC card targeting system (which maps BK1→index 3, BK2→index 4)
-        only picks players actually on the field, not bench depth.
+        5E formation has 5 receiver-eligible positions in this order:
+          [0] FL  (Flanker)   — typically WR2
+          [1] LE  (Left End)  — typically WR1 (primary receiver)
+          [2] RE  (Right End) — typically TE1
+          [3] BK1 (Back 1)   — RB1
+          [4] BK2 (Back 2)   — RB2
+
+        The FAC card targeting system (FL→0, LE→1, RE→2, BK1→3, BK2→4)
+        relies on this exact ordering so the correct on-field player is
+        targeted for each pass.
         """
         team = self.get_offense_team()
-        receivers = [
-            rec for rec in (list(team.roster.wrs) + list(team.roster.tes))
-            if not self._is_player_unavailable(rec)
-        ]
-        # Cap to on-field positions only (5E: FL, LE, RE, BK1, BK2)
-        receivers = receivers[:5]
+        wrs = [w for w in team.roster.wrs if not self._is_player_unavailable(w)]
+        tes = [t for t in team.roster.tes if not self._is_player_unavailable(t)]
+        rbs = [r for r in team.roster.rbs if not self._is_player_unavailable(r)]
+
+        # Build formation: FL, LE, RE, BK1, BK2
+        # LE = primary WR (WR1), FL = secondary WR (WR2), RE = primary TE
+        # BK1 = RB1, BK2 = RB2
+        if len(wrs) >= 2:
+            fl = wrs[1]  # WR2 as flanker
+            le = wrs[0]  # WR1 at left end
+        elif len(wrs) == 1:
+            fl = wrs[0]  # Only WR → flanker
+            le = tes[0] if tes else None  # TE fills left end
+        else:
+            # No WRs: TEs fill LE first (primary), then FL
+            le = tes[0] if len(tes) > 0 else None
+            fl = tes[1] if len(tes) > 1 else None
+
+        # RE = first TE not already used at LE
+        re_candidates = [t for t in tes if t is not le and t is not fl]
+        re = re_candidates[0] if re_candidates else None
+
+        bk1 = rbs[0] if len(rbs) > 0 else None
+        bk2 = rbs[1] if len(rbs) > 1 else None
+
+        receivers = [r for r in [fl, le, re, bk1, bk2] if r is not None]
+
         # Assign receiver letters if not already set
         letters = ["A", "B", "C", "D", "E"]
         for i, rec in enumerate(receivers):
@@ -711,10 +976,53 @@ class Game:
 
         # ── 5E Play calling with proper types ────────────────────────
         off_play, off_strategy, player_inv = self.ai.call_offense_play_5e(situation, fac_card)
-        def_formation_5e, def_play_5e, def_strategy_5e = self.ai.call_defense_play_5e(
-            situation, fac_card
-        )
-        
+
+        # Synchronize play_call direction with 5E offensive play so the
+        # display string ("Running Sweep Left") matches the actual FAC
+        # direction used for blocking matchup resolution (SL/IL/SR/IR).
+        if off_play in _OFFENSIVE_PLAY_TO_DIRECTION and play_call.play_type == "RUN":
+            play_call = PlayCall(
+                play_type=play_call.play_type,
+                formation=play_call.formation,
+                direction=_OFFENSIVE_PLAY_TO_DIRECTION[off_play],
+                reasoning=play_call.reasoning,
+                strategy=play_call.strategy,
+                offensive_play=off_play.value,
+                player_involved=player_inv.value,
+            )
+
+        # If the human provided a defensive play, use it; otherwise use AI
+        if defensive_play is not None:
+            # Convert string to DefensivePlay enum
+            try:
+                def_play_5e = DefensivePlay(defensive_play.upper())
+            except ValueError:
+                def_play_5e = DefensivePlay.PASS_DEFENSE
+            # Convert string to DefensiveFormation enum
+            if defense_formation is not None:
+                try:
+                    def_formation_5e = DefensiveFormation(defense_formation.upper())
+                except ValueError:
+                    # Try mapping legacy formation names
+                    from .play_types import LEGACY_FORMATION_TO_FORMATION
+                    def_formation_5e = LEGACY_FORMATION_TO_FORMATION.get(
+                        defense_formation.upper(), DefensiveFormation.FOUR_THREE
+                    )
+            else:
+                def_formation_5e = DefensiveFormation.FOUR_THREE
+            # Convert string to DefensiveStrategy enum
+            if defensive_strategy is not None:
+                try:
+                    def_strategy_5e = DefensiveStrategy(defensive_strategy.upper())
+                except ValueError:
+                    def_strategy_5e = DefensiveStrategy.NONE
+            else:
+                def_strategy_5e = DefensiveStrategy.NONE
+        else:
+            def_formation_5e, def_play_5e, def_strategy_5e = self.ai.call_defense_play_5e(
+                situation, fac_card
+            )
+
         # Use provided defensive_strategy or fall back to AI-called strategy
         if defensive_strategy is None:
             defensive_strategy = def_strategy_5e.value
@@ -837,7 +1145,7 @@ class Game:
                         kicking_team=self.get_offense_team(),
                         receiving_team=self.get_defense_team(),
                     )
-                    self.state.play_log.append(kickoff.description)
+                    self._log_kickoff(kickoff)
                     new_yl = self._kickoff_yard_line(kickoff)
                     self._change_possession(new_yl)
                     return result
@@ -892,6 +1200,9 @@ class Game:
                 self.state.play_log.append(
                     f"  ⚕ {injured_player} injured! Out for {duration} plays."
                 )
+                # Immediately swap injured player out of the starter slot so
+                # the formation grid and personnel views reflect the change.
+                self._immediate_injury_swap(injured_player)
 
         # ── 5E Z-card penalty resolution ─────────────────────────────
         if result.z_card_event and result.z_card_event.get("type") == "PENALTY":
@@ -911,9 +1222,19 @@ class Game:
                     )
 
         # ── 5E Endurance tracking ────────────────────────────────────
-        ball_carrier = result.rusher or result.receiver
+        # Track the *intended* target of the play for endurance purposes.
+        # For runs: the ball carrier (result.rusher).
+        # For passes: the intended receiver (player_name), not the FAC
+        # check-off receiver.  "A play directed at" in the rules means
+        # the coach's choice, not the FAC redirect.
+        if result.play_type == "PASS" and player_name:
+            endurance_target = player_name
+        else:
+            endurance_target = result.rusher or result.receiver
         self.state.prev_ball_carrier = self.state.last_ball_carrier
-        self.state.last_ball_carrier = ball_carrier
+        self.state.last_ball_carrier = endurance_target
+        # Record usage for endurance 3 (per-drive) and 4 (per-quarter)
+        self._record_endurance_usage(endurance_target)
         
         # ── 5E Two-Minute Offense yardage restrictions ───────────────
         if result.play_type in ("RUN", "SCREEN") and not result.turnover:
@@ -948,7 +1269,7 @@ class Game:
                 kicking_team=self.get_offense_team(),
                 receiving_team=self.get_defense_team(),
             )
-            self.state.play_log.append(kickoff.description)
+            self._log_kickoff(kickoff)
             new_yl = self._kickoff_yard_line(kickoff)
             self._change_possession(new_yl)
             return result
@@ -965,8 +1286,18 @@ class Game:
                 self.state.play_log.append(
                     f"Score: Away {self.state.score.away} - Home {self.state.score.home}"
                 )
-            opp_yl = max(20, 100 - self.state.yard_line - 7)
-            self._change_possession(opp_yl)
+                # Scoring team kicks off to opponent after a field goal
+                kickoff = self._do_kickoff(
+                    kicking_team=self.get_offense_team(),
+                    receiving_team=self.get_defense_team(),
+                )
+                self._log_kickoff(kickoff)
+                new_yl = self._kickoff_yard_line(kickoff)
+                self._change_possession(new_yl)
+            else:
+                # Missed FG: opponent gets ball at spot of kick or 20
+                opp_yl = max(20, 100 - self.state.yard_line - 7)
+                self._change_possession(opp_yl)
             return result
 
         if play_call.play_type == "KNEEL":
@@ -1013,7 +1344,49 @@ class Game:
         # Build defenders_by_box mapping for individual tackle ratings
         defenders_by_box = self._build_defenders_by_box(defense)
 
+        # Build offensive_blockers_by_pos mapping for blocking values
+        blocking_back_bv = 0
+        offense = self.get_offense_team()
+        offensive_blockers_by_pos: Dict[str, PlayerCard] = {}
+        if offense and offense.roster:
+            # Map OL by position: LT, LG, C→CN, RG, RT
+            for ol in offense.roster.offensive_line:
+                pos = getattr(ol, 'position', '').upper()
+                if pos == "C":
+                    offensive_blockers_by_pos["CN"] = ol
+                elif pos in ("LG", "RG", "LT", "RT"):
+                    offensive_blockers_by_pos[pos] = ol
+                elif pos == "OL":
+                    # Generic OL: fill first unfilled standard position
+                    for slot in ("LT", "LG", "CN", "RG", "RT"):
+                        if slot not in offensive_blockers_by_pos:
+                            offensive_blockers_by_pos[slot] = ol
+                            break
+            # Map TEs as LE/RE
+            for te in offense.roster.tes:
+                if "LE" not in offensive_blockers_by_pos:
+                    offensive_blockers_by_pos["LE"] = te
+                elif "RE" not in offensive_blockers_by_pos:
+                    offensive_blockers_by_pos["RE"] = te
+            # Map BK = blocking back (different RB than the ball carrier)
+            if offense.roster.rbs:
+                for rb_candidate in offense.roster.rbs:
+                    if rb_candidate.player_name != (rusher.player_name if rusher else None):
+                        offensive_blockers_by_pos["BK"] = rb_candidate
+                        blocking_back_bv = getattr(rb_candidate, 'blocks', 0) or 0
+                        break
+
         if rusher:
+            # ── Endurance check: +2 to RN if ball carrier violates ────
+            endurance_rn_penalty = 0
+            endurance_violation = self._check_endurance_violation(rusher)
+            if endurance_violation:
+                endurance_rn_penalty = 2
+                self._record_personnel_note(
+                    f"Endurance violation ({endurance_violation}): "
+                    f"+2 RN penalty for {rusher.player_name}."
+                )
+
             # Determine fumble team ratings
             offense = self.get_offense_team()
             off_fumbles_lost_max = getattr(offense, 'fumbles_lost_max', 21) if offense else 21
@@ -1025,10 +1398,14 @@ class Game:
                 defense_run_stop=def_run_stop,
                 defense_formation=def_formation,
                 defensive_play_5e=defensive_play_5e,
+                extra_rn_modifier=endurance_rn_penalty,
+                blocking_back_bv=blocking_back_bv,
                 defenders_by_box=defenders_by_box,
+                offensive_blockers_by_pos=offensive_blockers_by_pos,
                 fumbles_lost_max=off_fumbles_lost_max,
                 def_fumble_adj=def_fumble_adj_val,
                 is_home=off_is_home,
+                yard_line=self.state.yard_line,
             )
             result.defense_formation = def_formation
             # Store box assignments on result for tracking
@@ -1100,6 +1477,44 @@ class Game:
         # Build defenders-by-box mapping for pass defense rating lookups
         defenders_by_box = self._build_defenders_by_box(defense) if defense else {}
 
+        # ── Calculate actual OL pass-blocking sum ─────────────────────
+        # Per 5E rules: sum Pass Blocking Values of all five linemen
+        offense = self.get_offense_team()
+        ol_pass_block_sum = 0
+        if offense and offense.roster:
+            for ol in offense.roster.offensive_line[:5]:
+                ol_pass_block_sum += getattr(ol, 'pass_block_rating', 0)
+
+        # ── Calculate actual DL pass-rush sum ─────────────────────────
+        # Per 5E rules: sum Pass Rush Values of all players in Row 1
+        # (Defensive Line boxes A-E).  If blitz is in effect, blitzing
+        # players have a Pass Rush Value of 2 regardless of printed value.
+        dl_pass_rush_sum = 0
+        row1_boxes = ('A', 'B', 'C', 'D', 'E')
+        blitz_active = (defensive_play_5e == DefensivePlay.BLITZ)
+        for box_letter, defender in defenders_by_box.items():
+            if box_letter in row1_boxes:
+                dl_pass_rush_sum += getattr(defender, 'pass_rush_rating', 0)
+        # When blitz is active, blitzing LBs/DBs each add PR=2
+        blitzing_names: List[str] = []
+        if blitz_active:
+            blitz_boxes = set()
+            # Per 5E Blitz Summation Chart: PN determines which boxes blitz
+            # PN 1-26 → F & J, PN 27-35 → F & J & M, PN 36-48 → F-J
+            BLITZ_TWO_PLAYER_MAX = 26   # PN boundary: 2-player blitz
+            BLITZ_THREE_PLAYER_MAX = 35  # PN boundary: 3-player blitz
+            pn = fac_card.pass_num_int or BLITZ_TWO_PLAYER_MAX
+            if pn <= BLITZ_TWO_PLAYER_MAX:
+                blitz_boxes = {'F', 'J'}
+            elif pn <= BLITZ_THREE_PLAYER_MAX:
+                blitz_boxes = {'F', 'J', 'M'}
+            else:
+                blitz_boxes = {'F', 'G', 'H', 'I', 'J'}
+            for box_letter in blitz_boxes:
+                if box_letter in defenders_by_box:
+                    dl_pass_rush_sum += 2  # Blitzing player PR = 2
+                    blitzing_names.append(defenders_by_box[box_letter].player_name)
+
         # Determine which defender (if any) moved for double coverage.
         # If double coverage is active, the FS (box M) typically leaves
         # their assignment to double-cover the targeted receiver.
@@ -1116,11 +1531,22 @@ class Game:
             pass_type = "SHORT"
 
         if qb and receiver:
+            # ── Endurance check for receiver: -5 to completion range ───
+            endurance_comp_penalty = 0
+            endurance_violation = self._check_endurance_violation(receiver, for_pass=True)
+            if endurance_violation:
+                endurance_comp_penalty = -5
+                self._record_personnel_note(
+                    f"Endurance violation ({endurance_violation}): "
+                    f"-5 completion range for targeting {receiver.player_name}."
+                )
+
             result = self.resolver.resolve_pass_5e(
                 fac_card, self.deck, qb, receiver, receivers,
                 pass_type=pass_type,
                 defense_coverage=defense.defense_rating,
-                defense_pass_rush=defense.defense_rating,
+                defense_pass_rush=dl_pass_rush_sum,
+                offense_pass_block=ol_pass_block_sum,
                 defense_formation=def_formation,
                 defensive_strategy=defensive_strategy or "NONE",
                 defenders=defenders,
@@ -1130,6 +1556,8 @@ class Game:
                 defenders_by_box=defenders_by_box,
                 backs_blocking=backs_blocking,
                 double_coverage_defender_box=double_coverage_defender_box,
+                blitzer_names=blitzing_names or None,
+                endurance_modifier=endurance_comp_penalty,
             )
             result.defense_formation = def_formation
             return result
@@ -1144,7 +1572,7 @@ class Game:
         )
 
     def simulate_drive(self) -> DriveResult:
-        """Simulate an entire drive."""
+        """Simulate an entire drive using 5E FAC deck."""
         plays = 0
         yards = 0
         drive_log = []
@@ -1152,8 +1580,8 @@ class Game:
 
         while plays < max_plays and not self.state.is_over:
             situation = self.state.to_situation()
-            dice = self.dice.roll()
-            play_call = self.ai.call_play(situation, dice)
+            fac_card = self.deck.draw()
+            play_call = self.ai.call_play_5e(situation, fac_card)
 
             prev_yl = self.state.yard_line
             prev_possession = self.state.possession
@@ -1199,6 +1627,91 @@ class Game:
             self.state.is_over = True
 
         return self.state
+
+    def format_boxscore(self) -> List[str]:
+        """Format a standard player stats boxscore as a list of lines."""
+        lines: List[str] = []
+        stats = self.state.player_stats
+        if not stats:
+            return lines
+
+        lines.append("")
+        lines.append("=" * 50)
+        lines.append("PLAYER STATS")
+        lines.append("=" * 50)
+
+        # Collect players with passing stats
+        passers = [
+            (name, s) for name, s in stats.items()
+            if s.get("pass_attempts", 0) > 0
+        ]
+        if passers:
+            lines.append("")
+            lines.append("PASSING                  Cmp/Att   Yds  TD INT Sck")
+            lines.append("-" * 50)
+            for name, s in sorted(passers, key=lambda x: -x[1].get("passing_yards", 0)):
+                cmp = s.get("completions", 0)
+                att = s.get("pass_attempts", 0)
+                yds = s.get("passing_yards", 0)
+                td = s.get("passing_tds", 0)
+                ints = s.get("interceptions", 0)
+                sck = s.get("sacks", 0)
+                lines.append(f"  {name:<22s} {cmp:>3d}/{att:<3d} {yds:>5d} {td:>3d} {ints:>3d} {sck:>3d}")
+
+        # Collect players with rushing stats
+        rushers = [
+            (name, s) for name, s in stats.items()
+            if s.get("rushing_attempts", 0) > 0
+        ]
+        if rushers:
+            lines.append("")
+            lines.append("RUSHING                    Att   Yds  TD")
+            lines.append("-" * 50)
+            for name, s in sorted(rushers, key=lambda x: -x[1].get("rushing_yards", 0)):
+                att = s.get("rushing_attempts", 0)
+                yds = s.get("rushing_yards", 0)
+                td = s.get("rushing_tds", 0)
+                lines.append(f"  {name:<24s} {att:>3d} {yds:>5d} {td:>3d}")
+
+        # Collect players with receiving stats
+        receivers = [
+            (name, s) for name, s in stats.items()
+            if s.get("receptions", 0) > 0
+        ]
+        if receivers:
+            lines.append("")
+            lines.append("RECEIVING                  Rec   Yds  TD")
+            lines.append("-" * 50)
+            for name, s in sorted(receivers, key=lambda x: -x[1].get("receiving_yards", 0)):
+                rec = s.get("receptions", 0)
+                yds = s.get("receiving_yards", 0)
+                td = s.get("receiving_tds", 0)
+                lines.append(f"  {name:<24s} {rec:>3d} {yds:>5d} {td:>3d}")
+
+        # Fumbles lost — tracked at team level
+        if any(v > 0 for v in self.state.turnovers.values()):
+            lines.append("")
+            lines.append("TURNOVERS")
+            lines.append("-" * 50)
+            for team_key in ("away", "home"):
+                team_name = self.state.away_team if team_key == "away" else self.state.home_team
+                to = self.state.turnovers.get(team_key, 0)
+                if to > 0:
+                    lines.append(f"  {team_name}: {to}")
+
+        # Penalties
+        if any(v > 0 for v in self.state.penalties.values()):
+            lines.append("")
+            lines.append("PENALTIES")
+            lines.append("-" * 50)
+            for team_key in ("away", "home"):
+                team_name = self.state.away_team if team_key == "away" else self.state.home_team
+                cnt = self.state.penalties.get(team_key, 0)
+                yds = self.state.penalty_yards.get(team_key, 0)
+                if cnt > 0:
+                    lines.append(f"  {team_name}: {cnt} for {yds} yards")
+
+        return lines
 
     def _time_str(self) -> str:
         mins = self.state.time_remaining // 60
@@ -1260,7 +1773,8 @@ class Game:
         if not punter:
             return PlayResult("PUNT", -10, "GAIN",
                               description="Fake punt failed — no punter found")
-        result = self.resolver.resolve_fake_punt(self.deck, punter)
+        result = self.resolver.resolve_fake_punt(self.deck, punter,
+                                                yard_line=self.state.yard_line)
         self.state.play_log.append(f"FAKE PUNT: {result.description}")
         if result.turnover:
             self._handle_turnover(result)
@@ -1270,7 +1784,7 @@ class Game:
                 kicking_team=self.get_offense_team(),
                 receiving_team=self.get_defense_team(),
             )
-            self.state.play_log.append(kickoff.description)
+            self._log_kickoff(kickoff)
             new_yl = self._kickoff_yard_line(kickoff)
             self._change_possession(new_yl)
         else:
@@ -1291,7 +1805,8 @@ class Game:
                               description="Fake FG failed — no holder found")
         minutes_remaining = self.state.time_remaining / 60.0
         result = self.resolver.resolve_fake_field_goal(
-            self.deck, qb, minutes_remaining
+            self.deck, qb, minutes_remaining,
+            yard_line=self.state.yard_line,
         )
         self.state.play_log.append(f"FAKE FG: {result.description}")
         if result.turnover:
@@ -1302,7 +1817,7 @@ class Game:
                 kicking_team=self.get_offense_team(),
                 receiving_team=self.get_defense_team(),
             )
-            self.state.play_log.append(kickoff.description)
+            self._log_kickoff(kickoff)
             new_yl = self._kickoff_yard_line(kickoff)
             self._change_possession(new_yl)
         else:

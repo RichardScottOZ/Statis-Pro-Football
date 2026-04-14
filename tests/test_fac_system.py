@@ -20,7 +20,6 @@ from engine.fac_distributions import (
     effective_pass_rush, effective_coverage, effective_run_stop,
     pass_number, run_number,
 )
-from engine.fast_action_dice import FastActionDice, DiceResult, PlayTendency
 from engine.card_generator import (
     CardGenerator, _make_qb_short_pass, _make_rb_inside_run,
     _make_rb_outside_run, _make_wr_reception, _make_qb_rush,
@@ -130,17 +129,6 @@ class TestPassRunNumber:
 
     def test_run_number(self):
         assert run_number(5, 2) == 52
-
-    def test_dice_result_has_pn_rn(self):
-        d = FastActionDice()
-        r = d.roll()
-        assert r.pass_number == r.two_digit
-        assert r.run_number == r.two_digit
-
-    def test_dice_result_has_slot(self):
-        d = FastActionDice()
-        r = d.roll()
-        assert r.slot == str(r.two_digit)
 
 
 # ─── Formation Modifiers ────────────────────────────────────────────
@@ -253,8 +241,6 @@ class TestNewCardGeneration:
         assert len(card2.punt_column) == 64
 
 
-# ─── Two-Stage Pass Resolution ──────────────────────────────────────
-
 
 # ─── OOB and Clock ──────────────────────────────────────────────────
 
@@ -263,16 +249,7 @@ class TestOOBAndClock:
         random.seed(42)
         self.resolver = PlayResolver()
         self.gen = CardGenerator(seed=42)
-        self.dice = FastActionDice()
 
-    def test_oob_result_has_out_of_bounds_flag(self):
-        # Verify that a PlayResult with out_of_bounds=True has the OOB flag
-        oob_result = PlayResult(
-            play_type="RUN", yards_gained=5, result="OOB",
-            out_of_bounds=True, description="Run OOB",
-        )
-        assert oob_result.out_of_bounds is True
-        assert oob_result.result == "OOB"
 
     def test_oob_result_stops_clock(self):
         """OOB plays should use clock-stop time (10 seconds per 5E rules)."""
@@ -383,6 +360,8 @@ class TestDefenseFormationOverride:
 
 
 # ─── Defense Integration in Resolution ──────────────────────────────
+
+
 
 # ─── Loaded Team Data Validation ────────────────────────────────────
 
