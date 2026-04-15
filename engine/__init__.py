@@ -4,7 +4,7 @@ from .player_card import PlayerCard, Position, Grade, PASS_SLOTS, RUN_SLOTS, REC
 from .card_generator import CardGenerator
 from .charts import Charts
 from .team import Team, Roster
-from .play_resolver import PlayResolver, PlayResult
+from .play_resolver import PlayResolver, PlayResult, PENALTY_TABLE_5E, resolve_z_penalty
 from .game import Game, GameState, DriveResult
 from .solitaire import SolitaireAI
 from .play_types import (
@@ -18,8 +18,6 @@ from .play_types import (
     get_run_number_modifier_5e, get_completion_modifier_5e,
 )
 from .fac_distributions import (
-    ZCardTrigger,
-    lookup_z_card_event,
     FORMATION_MODIFIERS,
     DEFENSIVE_PLAY_MODIFIERS,
     effective_pass_rush,
@@ -37,7 +35,7 @@ __all__ = [
     "CardGenerator",
     "Charts",
     "Team", "Roster",
-    "PlayResolver", "PlayResult",
+    "PlayResolver", "PlayResult", "PENALTY_TABLE_5E", "resolve_z_penalty",
     "Game", "GameState", "DriveResult",
     "SolitaireAI",
     "DefensivePlay", "DefensiveFormation", "DefensiveStrategy",
@@ -48,7 +46,6 @@ __all__ = [
     "LEGACY_FORMATION_TO_PLAY", "LEGACY_FORMATION_TO_FORMATION",
     "is_run_defense", "is_pass_defense", "is_run_play", "is_pass_play",
     "get_run_number_modifier_5e", "get_completion_modifier_5e",
-    "ZCardTrigger", "lookup_z_card_event",
     "FORMATION_MODIFIERS", "DEFENSIVE_PLAY_MODIFIERS",
     "effective_pass_rush", "effective_coverage", "effective_run_stop",
     "get_defensive_play_modifier",

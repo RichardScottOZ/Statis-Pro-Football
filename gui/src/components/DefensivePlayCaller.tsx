@@ -32,7 +32,7 @@ export function DefensivePlayCaller({
   const [blitzPlayers, setBlitzPlayers] = useState<string[]>([]);
 
   const disabled = loading || state.is_over;
-  const isBlitz = selectedPlay === 'BLITZ' || selectedFormation.includes('BLITZ');
+  const isBlitz = selectedPlay === 'BLITZ';
 
   const handleBlitzChange = useCallback((players: string[]) => {
     setBlitzPlayers(players);
@@ -204,13 +204,8 @@ function FormationDescription({ formation }: { formation: string }) {
   const descriptions: Record<string, string> = {
     '4_3': '4 DL, 3 LB — Balanced base defense. Good all-around.',
     '3_4': '3 DL, 4 LB — Extra LB for coverage and run support.',
-    '4_3_COVER2': '4 DL, 3 LB, Cover 2 — Strong pass coverage, weaker run stop.',
-    '3_4_ZONE': '3 DL, 4 LB, Zone — Good coverage, solid run stop.',
-    '4_3_BLITZ': '4 DL, 3 LB, Blitz — Heavy pass rush (+15), weak coverage (-10).',
-    'NICKEL_ZONE': '4 DL, 2 LB, 5 DB — Great coverage (+15), weak run stop (-10).',
-    'NICKEL_BLITZ': '4 DL, 2 LB, 5 DB, Blitz — Strong rush (+15), decent coverage.',
-    'NICKEL_COVER2': '4 DL, 2 LB, 5 DB, Cover 2 — Good coverage, weak run stop.',
-    'GOAL_LINE': '5+ DL, LB — Massive run stop (+20), no pass coverage (-15).',
+    'NICKEL_ZONE': '4 DL, 2 LB, 5 DB — Extra DB for pass situations.',
+    'GOAL_LINE': '5+ DL, LB — Heavy run stop, minimal pass coverage.',
   };
 
   return (

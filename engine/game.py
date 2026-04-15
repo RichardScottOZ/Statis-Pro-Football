@@ -7,7 +7,7 @@ from enum import Enum
 from .fac_deck import FACDeck, FACCard
 from .player_card import PlayerCard
 from .team import Team
-from .play_resolver import PlayResolver, PlayResult, BigPlayDefense
+from .play_resolver import PlayResolver, PlayResult, BigPlayDefense, resolve_z_penalty
 from .solitaire import SolitaireAI, GameSituation, PlayCall
 from .charts import Charts
 from .play_types import (
@@ -128,6 +128,7 @@ class Game:
         # 5E Solitaire: remove 1 Z card when both teams are AI-controlled
         is_solitaire = solitaire_home and solitaire_away
         self.deck = FACDeck(seed=seed, solitaire=is_solitaire)
+
         self.resolver = PlayResolver()
         self.ai = SolitaireAI()
         self.solitaire_home = solitaire_home
@@ -405,19 +406,9 @@ class Game:
         return self._resolve_position_player(self.get_offense_team().roster.punters, "P")
 
     def _track_play_stats(self, result) -> None:
-        """Track player stats and game-level penalty/turnover counts."""
+        """Track player stats and game-level turnover counts."""
         stats = self.state.player_stats
         team = self.state.possession
-
-        # Track penalties
-        if result.penalty:
-            pen_type = result.penalty.get("type", "")
-            is_def = "DEF" in pen_type or result.penalty.get("auto_first", False)
-            pen_team = self.state.get_defense_team() if is_def else team
-            self.state.penalties[pen_team] = self.state.penalties.get(pen_team, 0) + 1
-            self.state.penalty_yards[pen_team] = (
-                self.state.penalty_yards.get(pen_team, 0) + result.penalty.get("yards", 0)
-            )
 
         # Track turnovers
         if result.turnover:
@@ -582,7 +573,7 @@ class Game:
                      defensive_strategy: Optional[str] = None,
                      defensive_play: Optional[str] = None,
                      blitz_players: Optional[List[str]] = None) -> PlayResult:
-        """Execute a single play.
+        """Execute a single play using 5th-edition rules.
 
         Args:
             play_call: Optional human-specified offensive play call.
@@ -732,20 +723,38 @@ class Game:
             self._change_possession(new_yl)
 
     def _apply_penalty(self, penalty: Dict) -> None:
-        ptype = penalty.get("type", "HOLDING_OFF")
+        """Apply a penalty to the game state.
+
+        Supports the 5E penalty format (from Z-card resolution) which uses
+        a 'team' field ('offense'/'defense'/'kicking'/'receiving') and also
+        the punt/kickoff penalty dicts which use their own conventions.
+        """
+        ptype = penalty.get("type", "")
         yards = penalty.get("yards", 10)
         auto_first = penalty.get("auto_first", False)
         loss_of_down = penalty.get("loss_of_down", False)
+        name = penalty.get("name", ptype)
 
-        self.state.play_log.append(f"  \u26a0 PENALTY: {ptype} - {yards} yards")
+        self.state.play_log.append(f"  ⚠ PENALTY: {name} - {yards} yards")
 
-        off_penalties = {
-            "FALSE_START", "ILLEGAL_MOTION", "DELAY_OF_GAME", "INELIGIBLE_RECEIVER",
-        }
-        if "OFF" in ptype or ptype in off_penalties:
+        # Determine whether this is against the offense or defense.
+        # 5E Z-card penalties have a "team" field; punt penalties have their own
+        # convention.
+        team = penalty.get("team", "")
+        is_against_offense = team in ("offense", "kicking")
+        is_against_defense = team in ("defense", "receiving")
+
+        # Apply half-distance-to-goal
+        if is_against_offense:
+            yards = PlayResolver.apply_half_distance_penalty(
+                yards, self.state.yard_line, is_offense_penalty=True
+            )
             self.state.yard_line = max(1, self.state.yard_line - yards)
             self.state.distance += yards
-        else:
+        elif is_against_defense:
+            yards = PlayResolver.apply_half_distance_penalty(
+                yards, self.state.yard_line, is_offense_penalty=False
+            )
             self.state.yard_line = min(99, self.state.yard_line + yards)
             self.state.distance -= yards
             if auto_first:
@@ -759,13 +768,17 @@ class Game:
             self.state.down = 1
             self.state.distance = 10
 
+        # Track penalty count
+        pen_team_key = (self.state.get_defense_team()
+                        if is_against_defense
+                        else (self.state.possession if self.state.possession else "home"))
+        self.state.penalties[pen_team_key] = self.state.penalties.get(pen_team_key, 0) + 1
+        self.state.penalty_yards[pen_team_key] = (
+            self.state.penalty_yards.get(pen_team_key, 0) + yards
+        )
+
         # Track defensive penalty for half-cannot-end rule
-        if "DEF" in ptype or ptype in ("ROUGHING_PASSER", "FACE_MASK",
-            "PASS_INTERFERENCE_DEF", "ENCROACHMENT", "HOLDING_DEF",
-            "ROUGHING_KICKER", "ILLEGAL_CONTACT", "UNNECESSARY_ROUGHNESS"):
-            self._last_play_had_defensive_penalty = True
-        else:
-            self._last_play_had_defensive_penalty = False
+        self._last_play_had_defensive_penalty = is_against_defense
 
     # ── 5E Timeout Rules ─────────────────────────────────────────────
 
@@ -1190,6 +1203,23 @@ class Game:
                 # Immediately swap injured player out of the starter slot so
                 # the formation grid and personnel views reflect the change.
                 self._immediate_injury_swap(injured_player)
+
+        # ── 5E Z-card penalty resolution ─────────────────────────────
+        if result.z_card_event and result.z_card_event.get("type") == "PENALTY":
+            pen_detail = result.z_card_event.get("detail", "")
+            pen_info = resolve_z_penalty(pen_detail, play_call.play_type)
+            if pen_info:
+                # Intentional Grounding (#10): only on incomplete passes
+                if pen_info.get("only_incomplete") and result.result != "INCOMPLETE":
+                    self.state.play_log.append(
+                        f"  ⚠ Intentional Grounding ignored (pass was not incomplete)"
+                    )
+                else:
+                    result.penalty = pen_info
+                    self.state.play_log.append(
+                        f"  ⚠ Z-CARD PENALTY: {pen_info['name']} "
+                        f"({pen_info['yards']}y vs {pen_info['team']})"
+                    )
 
         # ── 5E Endurance tracking ────────────────────────────────────
         # Track the *intended* target of the play for endurance purposes.

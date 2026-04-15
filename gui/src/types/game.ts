@@ -239,12 +239,7 @@ export interface StartingLineupData {
 export const DEFENSIVE_FORMATIONS = [
   { value: '4_3', label: '4-3 Base', icon: '🛡️' },
   { value: '3_4', label: '3-4 Base', icon: '🛡️' },
-  { value: '4_3_COVER2', label: '4-3 Cover 2', icon: '👁️' },
-  { value: '3_4_ZONE', label: '3-4 Zone', icon: '🌐' },
-  { value: '4_3_BLITZ', label: '4-3 Blitz', icon: '⚡' },
-  { value: 'NICKEL_ZONE', label: 'Nickel Zone', icon: '🪙' },
-  { value: 'NICKEL_BLITZ', label: 'Nickel Blitz', icon: '💥' },
-  { value: 'NICKEL_COVER2', label: 'Nickel Cover 2', icon: '🪙' },
+  { value: 'NICKEL_ZONE', label: 'Nickel', icon: '🪙' },
   { value: 'GOAL_LINE', label: 'Goal Line', icon: '🧱' },
 ] as const;
 

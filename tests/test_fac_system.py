@@ -16,8 +16,6 @@ from engine.fac_distributions import (
     SHORT_PASS_YARDS, LONG_PASS_YARDS, INSIDE_RUN_YARDS,
     OUTSIDE_RUN_YARDS, QB_RUSH_YARDS, OOB_RUN_YARDS,
     PUNT_YARDS, SACK_YARDS,
-    ZCardTrigger, lookup_z_card_event,
-    Z_CARD_OFFENSE_EVENTS, Z_CARD_DEFENSE_EVENTS,
     FORMATION_MODIFIERS,
     effective_pass_rush, effective_coverage, effective_run_stop,
     pass_number, run_number,
@@ -133,54 +131,6 @@ class TestPassRunNumber:
         assert run_number(5, 2) == 52
 
 
-# ─── Z-Card System ──────────────────────────────────────────────────
-
-class TestZCardTrigger:
-    def test_dice_combo_triggers(self):
-        for tens, ones in ZCardTrigger.Z_CARD_COMBOS:
-            assert ZCardTrigger.is_triggered(tens, ones)
-
-    def test_non_trigger_dice_dont_fire(self):
-        # (3, 5) is not a Z-card combo and doesn't match any situational trigger
-        assert not ZCardTrigger.is_triggered(3, 5, down=1, distance=10, yard_line=30)
-
-    def test_red_zone_third_down_trigger(self):
-        # Inside 20 (yard_line >= 80), 3rd down, with matching doubles
-        assert ZCardTrigger.is_triggered(3, 3, down=3, distance=5, yard_line=85)
-
-    def test_third_and_long_trigger(self):
-        assert ZCardTrigger.is_triggered(4, 4, down=3, distance=12, yard_line=30)
-
-    def test_late_game_pressure_trigger(self):
-        assert ZCardTrigger.is_triggered(1, 8, down=2, distance=7, yard_line=50,
-                                          quarter=4, time_remaining=60)
-
-
-class TestZCardEvents:
-    def test_offense_events_has_64_entries(self):
-        assert len(Z_CARD_OFFENSE_EVENTS) == 64
-
-    def test_defense_events_has_64_entries(self):
-        assert len(Z_CARD_DEFENSE_EVENTS) == 64
-
-    def test_lookup_returns_event(self):
-        event = lookup_z_card_event(1, 1, is_offense=True)
-        assert "event" in event
-        assert "yards" in event
-        assert "turnover" in event
-
-    def test_lookup_defense_event(self):
-        event = lookup_z_card_event(2, 2, is_offense=False)
-        assert event["event"] == "PICK_SIX"
-        assert event["turnover"] is True
-
-    def test_no_effect_for_most_slots(self):
-        # Most slots should be NO_EFFECT
-        no_effect_count = sum(1 for e in Z_CARD_OFFENSE_EVENTS.values()
-                              if e["event"] == "NO_EFFECT")
-        assert no_effect_count > 40  # Most are no-effect
-
-
 # ─── Formation Modifiers ────────────────────────────────────────────
 
 class TestFormationModifiers:
@@ -291,6 +241,7 @@ class TestNewCardGeneration:
         assert len(card2.punt_column) == 64
 
 
+
 # ─── OOB and Clock ──────────────────────────────────────────────────
 
 class TestOOBAndClock:
@@ -298,6 +249,7 @@ class TestOOBAndClock:
         random.seed(42)
         self.resolver = PlayResolver()
         self.gen = CardGenerator(seed=42)
+
 
     def test_oob_result_stops_clock(self):
         """OOB plays should use clock-stop time (10 seconds per 5E rules)."""
@@ -408,6 +360,7 @@ class TestDefenseFormationOverride:
 
 
 # ─── Defense Integration in Resolution ──────────────────────────────
+
 
 
 # ─── Loaded Team Data Validation ────────────────────────────────────

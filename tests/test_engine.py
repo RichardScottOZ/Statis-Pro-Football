@@ -112,13 +112,6 @@ class TestCardGenerator:
 # ─── Charts ──────────────────────────────────────────────────────────────────
 
 class TestCharts:
-    def test_penalty_chart_has_all_slots(self):
-        """Check all 64 combinations are in penalty chart."""
-        for t in range(1, 9):
-            for o in range(1, 9):
-                key = f"{t}{o}"
-                assert key in Charts.PENALTY_CHART, f"Missing penalty chart key: {key}"
-
     def test_kick_return_chart_coverage(self):
         for t in range(1, 9):
             for o in range(1, 9):
@@ -130,12 +123,6 @@ class TestCharts:
             for o in range(1, 9):
                 key = f"{t}{o}"
                 assert key in Charts.PUNT_RETURN_CHART
-
-    def test_roll_penalty_chart_returns_dict(self):
-        p = Charts.roll_penalty_chart()
-        assert isinstance(p, dict)
-        assert "type" in p
-        assert "yards" in p
 
     def test_roll_fumble_recovery_returns_valid(self):
         for _ in range(20):

@@ -29,6 +29,27 @@ export function PlayerCardView({ card }: PlayerCardProps) {
         </div>
       </div>
 
+      {/* Endurance Rating — shown prominently for skill position players */}
+      {['QB', 'RB', 'WR', 'TE'].includes(card.position) && (
+        <div className="card-endurance-bar">
+          {typeof extCard.endurance_rushing === 'number' && (
+            <span className="endurance-badge" title="Rushing Endurance (0=unlimited, 1-4=limited)">
+              🏃 End: {extCard.endurance_rushing as number}
+            </span>
+          )}
+          {typeof extCard.endurance_pass === 'number' && (
+            <span className="endurance-badge" title="Pass Endurance (0=unlimited, 1-4=limited)">
+              🎯 End: {extCard.endurance_pass as number}
+            </span>
+          )}
+          {card.position === 'QB' && extCard.qb_endurance && (
+            <span className="endurance-badge" title="QB Endurance Rating">
+              ⭐ QB End: {extCard.qb_endurance as string}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* QB Passing Ranges */}
       {card.position === 'QB' && extCard.passing_quick && (
         <div className="card-section">

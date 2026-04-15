@@ -2128,6 +2128,23 @@ body {
   color: var(--text-muted);
   padding: 2px 4px;
 }
+.card-endurance-bar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 4px 1rem;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.endurance-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
 .def-rating-grid {
   display: flex;
   flex-wrap: wrap;
