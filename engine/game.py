@@ -985,12 +985,15 @@ class Game:
         # Synchronize play_call direction with 5E offensive play so the
         # display string ("Running Sweep Left") matches the actual FAC
         # direction used for blocking matchup resolution (SL/IL/SR/IR).
-        # When the human provided a play_call, honour *their* direction
+        # When the human provided a play_call, honor *their* direction
         # and derive the OffensivePlay enum from it instead of overwriting
         # with the AI's random selection.
         if play_call.play_type == "RUN":
-            if human_provided and play_call.direction in _DIRECTION_TO_OFFENSIVE_PLAY:
-                off_play = _DIRECTION_TO_OFFENSIVE_PLAY[play_call.direction]
+            if human_provided:
+                if play_call.direction in _DIRECTION_TO_OFFENSIVE_PLAY:
+                    off_play = _DIRECTION_TO_OFFENSIVE_PLAY[play_call.direction]
+                # else: unrecognised direction – keep off_play from AI for
+                # logging but do NOT overwrite the human's direction.
                 play_call = PlayCall(
                     play_type=play_call.play_type,
                     formation=play_call.formation,
