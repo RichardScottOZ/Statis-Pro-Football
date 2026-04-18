@@ -527,7 +527,8 @@ class PlayResolver:
             elif defensive_play_5e == DefensivePlay.PASS_DEFENSE:
                 draw_mod = -2  # Bonus: pass coverage, not keying on run
             else:
-                draw_mod = 2   # Penalty: any Run Defense is set up to stop the run
+                # Penalty: covers all RUN_DEFENSE variants (no-key, keyed on back 1/2/3)
+                draw_mod = 2
         else:
             dp = (defensive_play or "").upper()
             form_lower = defense_formation.lower()

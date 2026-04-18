@@ -253,11 +253,12 @@ class TestOffensiveStrategies:
     # --- Tests using explicit defensive_play_5e enum (bug-fix coverage) ------
 
     def test_draw_run_defense_enum_gives_positive_rn_modifier(self):
-        """Draw with RUN_DEFENSE enum + default formation: +2 draw modifier.
+        """Draw with RUN_DEFENSE enum + default formation: +2 draw penalty modifier.
 
         When a human explicitly calls a run defense in the game log the
-        draw-play modifier must be +2 even if the formation string alone
-        would not indicate a run defense.
+        draw-play modifier must be +2 (penalty — higher RN = fewer yards for
+        offense) even if the formation string alone would not indicate a run
+        defense.
         """
         from engine.play_types import DefensivePlay
         from engine.card_generator import CardGenerator
@@ -377,11 +378,12 @@ class TestPlayActionModifiers:
     # --- Tests using explicit defensive_play_5e enum (bug-fix coverage) ------
 
     def test_play_action_pass_defense_enum_takes_priority_over_run_formation(self):
-        """Play-action with PASS_DEFENSE enum + run formation: -5 (not +5).
+        """Play-action with PASS_DEFENSE enum + run formation: -5 completion modifier.
 
-        This is the primary bug: when a human calls PASS_DEFENSE in the game
-        log but the formation string defaults to "4_3" (run), the modifier
-        must be -5 (defense not fooled), not +5 (run defense fooled).
+        Verify that explicit PASS_DEFENSE enum takes priority over the run
+        formation string "4_3", resulting in -5 modifier (defense not fooled).
+        Without the fix the formation string alone would give +5 (run defense
+        fooled), which is incorrect.
         """
         from engine.play_types import DefensivePlay
         deck = FACDeck(seed=42)
