@@ -554,10 +554,17 @@ class PlayResolver:
             draw_mod = 0
 
         # Resolve as inside run with draw modifier applied to RN before lookup.
-        # Pass defensive_play_5e so that the normal run-defense RN modifier
-        # (e.g. +2 for no-key run defense) is also applied inside resolve_run_5e
-        # as required by the 5E rules ("in addition to normal Run Number
-        # modifiers called for on each particular defense").
+        #
+        # ``draw_mod`` is the draw-specific bonus/penalty.  ``defensive_play_5e``
+        # is also forwarded to ``resolve_run_5e`` so that the *base* run-defense
+        # Run Number modifier is applied on top of it, exactly as the 5E rules
+        # state: "These modifiers are IN ADDITION TO normal Run Number modifiers
+        # called for on each particular defense."
+        #
+        # Example — Draw vs Run Defense / No Key:
+        #   draw_mod        = +2  (draw penalty: run defense is set to stop it)
+        #   base def_rn_mod = +2  (normal Run Defense / No Key modifier)
+        #   total RN change = +4  ← correct per 5E rules
         result = self.resolve_run_5e(
             fac_card, deck, rusher, "IL",
             defense_run_stop=defense_run_stop,

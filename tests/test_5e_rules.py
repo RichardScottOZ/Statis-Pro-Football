@@ -186,7 +186,12 @@ class TestOffensiveStrategies:
         assert "RN modifier" in result.description
 
     def test_draw_vs_blitz_gives_negative_rn_modifier(self):
-        """Draw vs Blitz: -4 to RN (bonus for offense) — via defensive_play string."""
+        """Draw vs Blitz: -4 draw modifier (bonus for offense) via defensive_play string.
+
+        Uses a standard "4_3" formation string — which carries no modifier
+        by itself — and an explicit ``defensive_play="BLITZ"`` string to
+        exercise the string-based fallback path in ``resolve_draw``.
+        """
         deck = FACDeck(seed=42)
         from engine.card_generator import CardGenerator
         gen = CardGenerator(seed=42)
