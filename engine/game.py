@@ -1065,7 +1065,10 @@ class Game:
                 situation, fac_card
             )
 
-        # Use provided defensive_strategy or fall back to AI-called strategy
+        # Ensure defensive_strategy string is always set.
+        # When the human provided a defensive_play, def_strategy_5e is derived from the human
+        # input (defaulting to NONE) — no AI was called.  When the AI chose the defense, use
+        # whatever strategy the AI selected.
         if defensive_strategy is None:
             defensive_strategy = def_strategy_5e.value
 
@@ -1160,7 +1163,14 @@ class Game:
             rusher = self.get_rb(player_name)
             if rusher is None:
                 rusher = self.get_qb(player_name)
-            def_form = defense_formation or self.ai.call_defense_5e(situation, fac_card)
+            # Use the human-provided defense formation when available; only fall back to AI
+            # when no defensive call was provided at all (solitaire/sim mode).
+            if defense_formation:
+                def_form = defense_formation
+            elif defensive_play is None:
+                def_form = self.ai.call_defense_5e(situation, fac_card)
+            else:
+                def_form = DefensiveFormation.FOUR_THREE.value
             defense = self.get_defense_team()
             defenders_by_box = self._build_defenders_by_box(defense)
             if rusher:
@@ -1182,7 +1192,14 @@ class Game:
             receiver = self._pick_receiver(play_call)
             receivers = self._get_all_receivers()
             defense = self.get_defense_team()
-            def_form = defense_formation or self.ai.call_defense_5e(situation, fac_card)
+            # Same logic as DRAW: prefer explicit formation, fall back to AI only in
+            # solitaire/sim mode where no defensive call is provided.
+            if defense_formation:
+                def_form = defense_formation
+            elif defensive_play is None:
+                def_form = self.ai.call_defense_5e(situation, fac_card)
+            else:
+                def_form = DefensiveFormation.FOUR_THREE.value
             
             # Get defensive players for coverage calculations
             defenders = []
