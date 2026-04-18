@@ -93,7 +93,25 @@ export function HumanPlayCaller({
   const isPassPlay = ['SHORT_PASS', 'LONG_PASS', 'QUICK_PASS', 'SCREEN'].includes(selectedPlay);
   const isSpecialPlay = ['PUNT', 'FG', 'KNEEL'].includes(selectedPlay);
 
+  // Reset strategy to NONE whenever the play type changes so that a
+  // previously-selected strategy never silently overrides the new play.
+  useEffect(() => {
+    setSelectedStrategy('NONE');
+  }, [selectedPlay]);
+
   const directions = isRunPlay ? RUN_DIRECTIONS : PASS_DIRECTIONS;
+
+  // Only show strategies that are valid for the selected play type:
+  //   - PLAY_ACTION is a pass-only strategy
+  //   - DRAW is a run-only strategy
+  //   - FLOP / SNEAK are QB-specific and shown for runs only
+  const availableStrategies = useMemo(() => {
+    return OFFENSIVE_STRATEGIES.filter(s => {
+      if (isRunPlay) return s.value !== 'PLAY_ACTION';
+      if (isPassPlay) return s.value !== 'DRAW' && s.value !== 'FLOP' && s.value !== 'SNEAK';
+      return s.value === 'NONE';
+    });
+  }, [isRunPlay, isPassPlay]);
 
   // Get available players based on play type
   const ballCarriers = useMemo(() => (
@@ -237,7 +255,7 @@ export function HumanPlayCaller({
         <div className="play-option">
           <label className="section-label">Strategy (5E)</label>
           <div className="option-pills">
-            {OFFENSIVE_STRATEGIES.map((s) => (
+            {availableStrategies.map((s) => (
               <button
                 key={s.value}
                 className={`option-pill ${selectedStrategy === s.value ? 'selected' : ''}`}

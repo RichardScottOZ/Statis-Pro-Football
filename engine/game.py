@@ -1094,6 +1094,20 @@ class Game:
 
         # ── Strategy handling ─────────────────────────────────────────
         strategy = getattr(play_call, 'strategy', None)
+
+        # Guard: ensure strategy is compatible with the play type so that
+        # a stale or mis-matched strategy selection never overrides the
+        # explicit play call made by the human.
+        #   - PLAY_ACTION is a pass strategy; discard it on run plays.
+        #   - DRAW is a run strategy; discard it on pass/special plays.
+        _PASS_TYPES = {"SHORT_PASS", "LONG_PASS", "QUICK_PASS", "SCREEN"}
+        _RUN_TYPES  = {"RUN"}
+        if strategy == "PLAY_ACTION" and play_call.play_type not in _PASS_TYPES:
+            strategy = None
+            play_call.strategy = None
+        if strategy == "DRAW" and play_call.play_type not in _RUN_TYPES:
+            strategy = None
+            play_call.strategy = None
         if strategy == "FLOP":
             qb = self.get_qb(player_name)
             if qb:
