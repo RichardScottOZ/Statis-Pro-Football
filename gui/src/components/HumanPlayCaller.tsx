@@ -52,13 +52,6 @@ const PASS_DIRECTIONS = [
   { value: 'MIDDLE', label: 'Middle' },
 ];
 
-const FORMATIONS = [
-  { value: 'SHOTGUN', label: 'Shotgun' },
-  { value: 'UNDER_CENTER', label: 'Under Center' },
-  { value: 'I_FORM', label: 'I-Formation' },
-  { value: 'TRIPS', label: 'Trips' },
-  { value: 'SPREAD', label: 'Spread' },
-];
 
 function ordinal(n: number) {
   return ['', '1st', '2nd', '3rd', '4th'][n] ?? `${n}th`;
@@ -83,7 +76,6 @@ export function HumanPlayCaller({
 }: HumanPlayCallerProps) {
   const [selectedPlay, setSelectedPlay] = useState<string>('RUN');
   const [selectedDirection, setSelectedDirection] = useState<string>('MIDDLE');
-  const [selectedFormation, setSelectedFormation] = useState<string>('UNDER_CENTER');
   const [selectedStrategy, setSelectedStrategy] = useState<string>('NONE');
   const [selectedPlayer, setSelectedPlayer] = useState<string>('');
 
@@ -94,7 +86,10 @@ export function HumanPlayCaller({
   const isSpecialPlay = ['PUNT', 'FG', 'KNEEL'].includes(selectedPlay);
 
   // Reset strategy to NONE whenever the play type changes so that a
-  // previously-selected strategy never silently overrides the new play.
+  // previously-selected strategy (e.g. Play-Action Pass) never silently
+  // carries over to an incompatible play type (e.g. Run).  The reset is
+  // intentional and unconditional — the strategy picker immediately shows
+  // only valid options for the new play type, so no valid strategy is lost.
   useEffect(() => {
     setSelectedStrategy('NONE');
   }, [selectedPlay]);
@@ -158,7 +153,7 @@ export function HumanPlayCaller({
     onCallPlay({
       play_type: selectedPlay,
       direction: isSpecialPlay ? 'MIDDLE' : selectedDirection,
-      formation: isSpecialPlay ? 'SHOTGUN' : selectedFormation,
+      formation: 'UNDER_CENTER',
       strategy: selectedStrategy !== 'NONE' ? selectedStrategy : undefined,
       player_name: selectedPlayer || undefined,
     });
@@ -214,7 +209,7 @@ export function HumanPlayCaller({
         </div>
       </div>
 
-      {/* Direction & Formation (not for special plays) */}
+      {/* Direction (not for special plays) */}
       {!isSpecialPlay && (
         <div className="play-options-row">
           <div className="play-option">
@@ -228,21 +223,6 @@ export function HumanPlayCaller({
                   disabled={disabled}
                 >
                   {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="play-option">
-            <label className="section-label">Formation</label>
-            <div className="option-pills">
-              {FORMATIONS.map((f) => (
-                <button
-                  key={f.value}
-                  className={`option-pill ${selectedFormation === f.value ? 'selected' : ''}`}
-                  onClick={() => setSelectedFormation(f.value)}
-                  disabled={disabled}
-                >
-                  {f.label}
                 </button>
               ))}
             </div>
