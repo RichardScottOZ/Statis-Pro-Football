@@ -349,7 +349,7 @@ export function SubstitutionPanel({
               </div>
             )}
             <div style={{ fontSize: '0.55em', color: '#666', marginTop: '2px' }}>
-              Packages set which players fill each receiver slot (FL/LE/RE/BK1/BK2).
+              Packages set which players fill each receiver slot (FL/LE/RE/BK1/BK2/BK3).
             </div>
           </div>
           )}

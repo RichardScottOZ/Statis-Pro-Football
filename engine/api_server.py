@@ -1253,7 +1253,7 @@ def apply_formation_package(game_id: str, request: ApplyPackageRequest):
     ``3TE``       — TE1→RE, TE2→LE, TE3→FL (three-TE set).
     ``JUMBO``     — same as 3TE, logged as Jumbo.
     ``4WR``       — WR1→LE, WR2→FL, WR3→RE (four-wide, no TE).
-    ``3RB``       — WR1→LE, TE1→RE, RB3→FL, RB1→BK1, RB2→BK2 (power run).
+    ``3RB``       — WR1→FL, TE1→RE, RB1→BK1, RB2→BK2, RB3→BK3 (power run, LE empty).
     """
     game = _get_game(game_id)
     side = _resolve_side(game, request.team)
