@@ -134,6 +134,7 @@ interface GameBoardProps {
   onTwoMinuteOffense: () => void;
   onDownloadGameLog: () => void;
   onNewGame: () => void;
+  onRefreshPersonnel?: () => void;
 }
 
 export function GameBoard({
@@ -165,6 +166,7 @@ export function GameBoard({
   onTwoMinuteOffense,
   onDownloadGameLog,
   onNewGame,
+  onRefreshPersonnel,
 }: GameBoardProps) {
   const isInteractive = gameMode !== 'solitaire';
   const [showTwoPoint, setShowTwoPoint] = useState(false);
@@ -497,6 +499,7 @@ export function GameBoard({
               personnel={personnel}
               loading={loading}
               onSubstitute={onSubstitute}
+              onRefreshPersonnel={onRefreshPersonnel}
             />
           )}
 

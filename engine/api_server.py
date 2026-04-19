@@ -172,7 +172,7 @@ class DefensivePlayCallRequest(BaseModel):
 
 
 class SubstitutionRequest(BaseModel):
-    position: str  # QB, RB, WR, TE, K, P, DL, LB, DB
+    position: str  # QB, RB, WR, TE, OL, LT, LG, C, RG, RT, K, P, DL, LB, DB
     player_out: str  # player name to remove from starters
     player_in: str  # player name to put in as starter
 
@@ -180,6 +180,19 @@ class SubstitutionRequest(BaseModel):
 class PositionChangeRequest(BaseModel):
     player_name: str  # player to move
     new_position: str  # new position (compatible positions only)
+
+
+class SetFieldSlotRequest(BaseModel):
+    """Assign a specific player to an on-field formation slot."""
+    slot: str        # FL, LE, RE, BK1, BK2  or  LT, LG, C, RG, RT
+    player_name: Optional[str] = None  # None / empty to clear the slot
+    team: str = "possession"  # 'home', 'away', or 'possession' (auto-detect)
+
+
+class ApplyPackageRequest(BaseModel):
+    """Apply a named formation package to an offense."""
+    package: str   # STANDARD, 2TE_1WR, 3TE, JUMBO, 4WR
+    team: str = "possession"  # 'home', 'away', or 'possession' (auto-detect)
 
 
 class StartingLineupRequest(BaseModel):
@@ -526,16 +539,58 @@ def get_personnel(game_id: str):
             "PR": _player_brief(game.get_returner(offense_team, "PR"), unavailable)
             if game.get_returner(offense_team, "PR") else None,
         },
+        "on_field_assignments": game.get_field_assignments(game.state.possession),
     }
 
 
 @app.post("/games/{game_id}/substitute")
 def substitute_player(game_id: str, request: SubstitutionRequest):
-    """Substitute a player on the current possession team."""
+    """Substitute a player on the current possession team.
+
+    Supports all offensive positions including OL (offensive linemen).
+    For OL subs, the player_out/player_in are matched across the full
+    offensive_line roster and the list order is swapped so the new player
+    becomes first (starter) at that position.
+    """
     game = _get_game(game_id)
 
     pos = request.position.upper()
     team = game.get_offense_team()
+
+    # OL substitution — search the entire offensive_line list regardless of
+    # the specific OL position label (LT/LG/C/RG/RT/OL).
+    if pos in ("OL", "LT", "LG", "C", "RG", "RT"):
+        player_list = team.roster.offensive_line
+        player_in_idx = next(
+            (i for i, p in enumerate(player_list)
+             if p.player_name.lower() == request.player_in.lower()),
+            None,
+        )
+        player_out_idx = next(
+            (i for i, p in enumerate(player_list)
+             if p.player_name.lower() == request.player_out.lower()),
+            None,
+        )
+        if player_in_idx is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Player '{request.player_in}' not found in OL",
+            )
+        if player_out_idx is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Player '{request.player_out}' not found in OL",
+            )
+        player_list[player_out_idx], player_list[player_in_idx] = (
+            player_list[player_in_idx], player_list[player_out_idx]
+        )
+        game.state.play_log.append(
+            f"OL SUB: {request.player_in} replaces {request.player_out} at {pos}"
+        )
+        return {
+            "message": f"{request.player_in} now starting at {pos} (OL)",
+            "state": _serialize_state(game.state),
+        }
 
     pos_map = {
         "QB": team.roster.qbs,
@@ -1078,10 +1133,17 @@ COMPATIBLE_POSITIONS: Dict[str, set] = {
     "SS": {"S", "FS", "CB", "DB"},
     "FS": {"S", "SS", "CB", "DB"},
     "DB": {"CB", "S", "SS", "FS"},
-    # Offensive position compatibility
+    # Offensive skill position compatibility
     "RB": {"WR", "TE"},
     "WR": {"RB", "TE"},
     "TE": {"WR", "RB"},
+    # Offensive line position compatibility
+    "LT": {"LG", "OL"},
+    "LG": {"LT", "C", "OL"},
+    "C": {"LG", "RG", "OL"},
+    "RG": {"LG", "C", "RT", "OL"},
+    "RT": {"RG", "OL"},
+    "OL": {"LT", "LG", "C", "RG", "RT"},
 }
 
 
@@ -1120,6 +1182,84 @@ def change_player_position(game_id: str, request: PositionChangeRequest):
                 }
 
     raise HTTPException(status_code=404, detail=f"Player '{request.player_name}' not found")
+
+
+# ─── On-Field Slot Assignment Endpoints ────────────────────────────────────
+
+def _resolve_side(game: Game, team_param: str) -> str:
+    """Resolve 'possession', 'home', or 'away' to 'home' or 'away'."""
+    if team_param == "possession":
+        return game.state.possession
+    if team_param in ("home", "away"):
+        return team_param
+    raise HTTPException(
+        status_code=400,
+        detail=f"Invalid team value '{team_param}'. Use 'home', 'away', or 'possession'.",
+    )
+
+
+@app.post("/games/{game_id}/set-field-slot")
+def set_field_slot(game_id: str, request: SetFieldSlotRequest):
+    """Assign (or clear) a player to an on-field formation slot.
+
+    Skill slots: FL, LE, RE, BK1, BK2
+    OL slots:    LT, LG, C, RG, RT
+
+    Passing ``player_name`` as null or empty string clears the slot and
+    reverts it to automatic roster-order selection.
+
+    This does not restrict which position a player can fill — you can place
+    a TE in the FL slot to run a 3-TE package.  The assignment takes effect
+    on the very next play call.
+    """
+    game = _get_game(game_id)
+    side = _resolve_side(game, request.team)
+    try:
+        msg = game.set_field_slot(side, request.slot, request.player_name or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "message": msg,
+        "on_field_assignments": game.get_field_assignments(side),
+        "state": _serialize_state(game.state),
+    }
+
+
+@app.get("/games/{game_id}/on-field-assignments")
+def get_on_field_assignments(game_id: str, team: str = "possession"):
+    """Get the current on-field slot overrides for an offense."""
+    game = _get_game(game_id)
+    side = _resolve_side(game, team)
+    return {
+        "team": side,
+        "on_field_assignments": game.get_field_assignments(side),
+    }
+
+
+@app.post("/games/{game_id}/apply-package")
+def apply_formation_package(game_id: str, request: ApplyPackageRequest):
+    """Apply a named formation package to the offense.
+
+    Packages
+    --------
+    ``STANDARD``  — clear all overrides (roster-order auto-select).
+    ``2TE_1WR``   — WR1→LE, WR2→FL, TE1→RE.
+    ``3TE``       — TE1→RE, TE2→LE, TE3→FL (three-TE set).
+    ``JUMBO``     — same as 3TE, logged as Jumbo.
+    ``4WR``       — WR1→LE, WR2→FL, WR3→RE (four-wide, no TE).
+    """
+    game = _get_game(game_id)
+    side = _resolve_side(game, request.team)
+    try:
+        msg = game.apply_formation_package(side, request.package)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "message": msg,
+        "package": request.package.upper(),
+        "on_field_assignments": game.get_field_assignments(side),
+        "state": _serialize_state(game.state),
+    }
 
 
 # ─── Defensive Substitution Endpoint ───────────────────────────────────────

@@ -166,6 +166,15 @@ class Game:
         self._big_play_defense = {"home": BigPlayDefense(), "away": BigPlayDefense()}
         self._current_play_personnel_note: Optional[str] = None
 
+        # ── On-field slot overrides ───────────────────────────────────
+        # Maps slot name → player_name (str).  When set, _get_all_receivers()
+        # and the OL blocking lookup use the named player for that slot
+        # instead of the default roster-order logic.
+        # Skill slots: FL, LE, RE, BK1, BK2  (per team side: "home" / "away")
+        # OL slots:    LT, LG, C, RG, RT    (per team side: "home" / "away")
+        self._on_field_offense: Dict[str, Dict[str, str]] = {"home": {}, "away": {}}
+        self._on_field_ol: Dict[str, Dict[str, str]] = {"home": {}, "away": {}}
+
         self.state.possession = random.choice(["home", "away"])
         self.state.play_log.append(f"Coin flip: {self.state.possession} team receives")
 
@@ -418,6 +427,157 @@ class Game:
 
     def get_punter(self) -> Optional[PlayerCard]:
         return self._resolve_position_player(self.get_offense_team().roster.punters, "P")
+
+    # ── On-field slot management ─────────────────────────────────────
+
+    # Valid skill slots and OL slots
+    _SKILL_SLOTS = {"FL", "LE", "RE", "BK1", "BK2"}
+    _OL_SLOTS = {"LT", "LG", "C", "RG", "RT"}
+
+    def set_field_slot(self, side: str, slot: str, player_name: Optional[str]) -> str:
+        """Assign (or clear) a named player to an on-field slot for *side*.
+
+        Parameters
+        ----------
+        side : str
+            ``'home'`` or ``'away'``.
+        slot : str
+            Skill slot (``FL``, ``LE``, ``RE``, ``BK1``, ``BK2``) or OL slot
+            (``LT``, ``LG``, ``C``, ``RG``, ``RT``).
+        player_name : str or None
+            Player name to assign.  Pass ``None`` (or empty string) to clear
+            the override and revert to automatic selection.
+
+        Returns a log message string.
+        """
+        slot = slot.upper()
+        side = side.lower()
+        if side not in ("home", "away"):
+            raise ValueError(f"Invalid side: {side}")
+
+        if player_name:
+            # Validate the player exists on the correct team
+            team = self.home_team if side == "home" else self.away_team
+            all_off = team.roster.all_players()
+            found = next((p for p in all_off if p.player_name.lower() == player_name.lower()), None)
+            if found is None:
+                raise ValueError(f"Player '{player_name}' not found on {side} team")
+
+        if slot in self._SKILL_SLOTS:
+            if player_name:
+                self._on_field_offense[side][slot] = player_name
+                msg = f"ON-FIELD SLOT: {player_name} assigned to {slot} ({side})"
+            else:
+                self._on_field_offense[side].pop(slot, None)
+                msg = f"ON-FIELD SLOT: {slot} ({side}) cleared — auto-select"
+        elif slot in self._OL_SLOTS:
+            if player_name:
+                self._on_field_ol[side][slot] = player_name
+                msg = f"OL SLOT: {player_name} assigned to {slot} ({side})"
+            else:
+                self._on_field_ol[side].pop(slot, None)
+                msg = f"OL SLOT: {slot} ({side}) cleared — auto-select"
+        else:
+            raise ValueError(
+                f"Invalid slot '{slot}'. Skill: {sorted(self._SKILL_SLOTS)}, "
+                f"OL: {sorted(self._OL_SLOTS)}"
+            )
+        self.state.play_log.append(msg)
+        return msg
+
+    def get_field_assignments(self, side: str) -> Dict[str, str]:
+        """Return the current on-field overrides for *side* (both skill and OL)."""
+        side = side.lower()
+        assignments: Dict[str, str] = {}
+        assignments.update(self._on_field_offense.get(side, {}))
+        assignments.update(self._on_field_ol.get(side, {}))
+        return assignments
+
+    def apply_formation_package(self, side: str, package: str) -> str:
+        """Apply a named formation package, setting on-field slot overrides.
+
+        Supported packages
+        ------------------
+        ``STANDARD``  — clear all overrides (fall back to roster order).
+        ``2TE_1WR``   — WR1→LE, WR2→FL, TE1→RE (default with explicit mapping).
+        ``3TE``       — TE1→RE, TE2→LE, TE3→FL (three tight-end set).
+        ``JUMBO``     — same as 3TE but logged as Jumbo package.
+        ``4WR``       — WR1→LE, WR2→FL, WR3→RE, no TE on field.
+        """
+        side = side.lower()
+        package = package.upper()
+        if side not in ("home", "away"):
+            raise ValueError(f"Invalid side: {side}")
+
+        team = self.home_team if side == "home" else self.away_team
+        unavail = set(self.state.injuries)
+
+        def _healthy(players: List[PlayerCard]) -> List[PlayerCard]:
+            return [p for p in players if p.player_name not in unavail]
+
+        wrs = _healthy(team.roster.wrs)
+        tes = _healthy(team.roster.tes)
+
+        # Clear current overrides first
+        self._on_field_offense[side] = {}
+        self._on_field_ol[side] = {}
+
+        if package == "STANDARD":
+            msg = f"PACKAGE: STANDARD ({side}) — auto-select restored"
+        elif package in ("3TE", "JUMBO"):
+            # TE1→RE, TE2→LE, TE3→FL
+            label = "JUMBO" if package == "JUMBO" else "3TE"
+            if len(tes) >= 3:
+                self._on_field_offense[side]["RE"] = tes[0].player_name
+                self._on_field_offense[side]["LE"] = tes[1].player_name
+                self._on_field_offense[side]["FL"] = tes[2].player_name
+                msg = (
+                    f"PACKAGE: {label} ({side}) — "
+                    f"RE={tes[0].player_name}, LE={tes[1].player_name}, "
+                    f"FL={tes[2].player_name}"
+                )
+            elif len(tes) == 2:
+                self._on_field_offense[side]["RE"] = tes[0].player_name
+                self._on_field_offense[side]["LE"] = tes[1].player_name
+                msg = (
+                    f"PACKAGE: {label} ({side}) — only 2 TEs available: "
+                    f"RE={tes[0].player_name}, LE={tes[1].player_name}"
+                )
+            else:
+                msg = f"PACKAGE: {label} ({side}) — not enough TEs (need 3, have {len(tes)})"
+        elif package == "4WR":
+            # WR1→LE, WR2→FL, WR3→RE (no TE)
+            if len(wrs) >= 3:
+                self._on_field_offense[side]["LE"] = wrs[0].player_name
+                self._on_field_offense[side]["FL"] = wrs[1].player_name
+                self._on_field_offense[side]["RE"] = wrs[2].player_name
+                msg = (
+                    f"PACKAGE: 4WR ({side}) — "
+                    f"LE={wrs[0].player_name}, FL={wrs[1].player_name}, "
+                    f"RE={wrs[2].player_name}"
+                )
+            else:
+                msg = f"PACKAGE: 4WR ({side}) — not enough WRs (need 3, have {len(wrs)})"
+        elif package == "2TE_1WR":
+            # WR1→LE, WR2→FL, TE1→RE
+            new_overrides: Dict[str, str] = {}
+            if wrs:
+                new_overrides["LE"] = wrs[0].player_name
+            if len(wrs) >= 2:
+                new_overrides["FL"] = wrs[1].player_name
+            if tes:
+                new_overrides["RE"] = tes[0].player_name
+            self._on_field_offense[side] = new_overrides
+            assignments = ", ".join(f"{k}={v}" for k, v in new_overrides.items())
+            msg = f"PACKAGE: 2TE_1WR ({side}) — {assignments}"
+        else:
+            raise ValueError(
+                f"Unknown package '{package}'. "
+                f"Valid: STANDARD, 2TE_1WR, 3TE, JUMBO, 4WR"
+            )
+
+        self.state.play_log.append(msg)
+        return msg
 
     def _track_play_stats(self, result) -> None:
         """Track player stats and game-level turnover counts."""
@@ -939,32 +1099,96 @@ class Game:
         The FAC card targeting system (FL→0, LE→1, RE→2, BK1→3, BK2→4)
         relies on this exact ordering so the correct on-field player is
         targeted for each pass.
+
+        If on-field slot overrides are set (via set_field_slot or
+        apply_formation_package), those player assignments take precedence
+        over the default roster-order logic for any slot that is defined.
         """
         team = self.get_offense_team()
+        side = self.state.possession
+        overrides = self._on_field_offense.get(side, {})
+
+        # Build a name→card lookup across all skill players so we can resolve
+        # overrides regardless of which position bucket the player normally
+        # lives in (e.g. a TE listed in the overrides as the FL slot).
+        all_skill: List[PlayerCard] = (
+            team.roster.wrs + team.roster.tes +
+            team.roster.rbs + team.roster.qbs
+        )
+        name_to_card: Dict[str, PlayerCard] = {p.player_name: p for p in all_skill}
+
+        def _resolve_override(slot: str) -> Optional[PlayerCard]:
+            """Return the override player for *slot* if set and not injured."""
+            name = overrides.get(slot)
+            if not name:
+                return None
+            card = name_to_card.get(name)
+            if card is None or self._is_player_unavailable(card):
+                return None
+            return card
+
         wrs = [w for w in team.roster.wrs if not self._is_player_unavailable(w)]
         tes = [t for t in team.roster.tes if not self._is_player_unavailable(t)]
         rbs = [r for r in team.roster.rbs if not self._is_player_unavailable(r)]
 
-        # Build formation: FL, LE, RE, BK1, BK2
+        # ── Resolve each slot, checking overrides first ───────────────
+        fl = _resolve_override("FL")
+        le = _resolve_override("LE")
+        re = _resolve_override("RE")
+        bk1 = _resolve_override("BK1")
+        bk2 = _resolve_override("BK2")
+
+        # Track which cards are already assigned by overrides (using object id)
+        # so the default logic doesn't double-assign them.
+        def _assigned_ids() -> set:
+            return {id(c) for c in [fl, le, re, bk1, bk2] if c is not None}
+
+        avail_wrs = [w for w in wrs if id(w) not in _assigned_ids()]
+        avail_tes = [t for t in tes if id(t) not in _assigned_ids()]
+        avail_rbs = [r for r in rbs if id(r) not in _assigned_ids()]
+
+        # Build formation: FL, LE, RE, BK1, BK2 for unset slots
         # LE = primary WR (WR1), FL = secondary WR (WR2), RE = primary TE
         # BK1 = RB1, BK2 = RB2
-        if len(wrs) >= 2:
-            fl = wrs[1]  # WR2 as flanker
-            le = wrs[0]  # WR1 at left end
-        elif len(wrs) == 1:
-            fl = wrs[0]  # Only WR → flanker
-            le = tes[0] if tes else None  # TE fills left end
-        else:
-            # No WRs: TEs fill LE first (primary), then FL
-            le = tes[0] if len(tes) > 0 else None
-            fl = tes[1] if len(tes) > 1 else None
+        if le is None and fl is None:
+            if len(avail_wrs) >= 2:
+                fl = avail_wrs[1]  # WR2 as flanker
+                le = avail_wrs[0]  # WR1 at left end
+            elif len(avail_wrs) == 1:
+                fl = avail_wrs[0]  # Only WR → flanker
+                le = avail_tes[0] if avail_tes else None  # TE fills left end
+            else:
+                le = avail_tes[0] if len(avail_tes) > 0 else None
+                fl = avail_tes[1] if len(avail_tes) > 1 else None
+        elif le is None:
+            # fl is set by override; fill le from available WRs/TEs
+            if avail_wrs:
+                le = avail_wrs[0]
+            elif avail_tes:
+                le = avail_tes[0]
+        elif fl is None:
+            # le is set by override; fill fl from available WRs/TEs
+            if avail_wrs:
+                fl = avail_wrs[0]
+            elif avail_tes:
+                fl = avail_tes[0]
 
-        # RE = first TE not already used at LE
-        re_candidates = [t for t in tes if t is not le and t is not fl]
-        re = re_candidates[0] if re_candidates else None
+        # Refresh available after FL/LE resolution
+        avail_tes = [t for t in tes if id(t) not in _assigned_ids()]
+        avail_rbs = [r for r in rbs if id(r) not in _assigned_ids()]
 
-        bk1 = rbs[0] if len(rbs) > 0 else None
-        bk2 = rbs[1] if len(rbs) > 1 else None
+        # RE = first available TE not already used
+        if re is None:
+            re = avail_tes[0] if avail_tes else None
+
+        # Update available again for BK slots
+        avail_rbs = [r for r in rbs if id(r) not in _assigned_ids()]
+
+        if bk1 is None:
+            bk1 = avail_rbs[0] if len(avail_rbs) > 0 else None
+        avail_rbs = [r for r in avail_rbs if r is not bk1]
+        if bk2 is None:
+            bk2 = avail_rbs[0] if avail_rbs else None
 
         receivers = [r for r in [fl, le, re, bk1, bk2] if r is not None]
 
@@ -1431,22 +1655,46 @@ class Game:
         # Build offensive_blockers_by_pos mapping for blocking values
         blocking_back_bv = 0
         offense = self.get_offense_team()
+        side = self.state.possession
+        ol_overrides = self._on_field_ol.get(side, {})
+        skill_overrides = self._on_field_offense.get(side, {})
         offensive_blockers_by_pos: Dict[str, PlayerCard] = {}
         if offense and offense.roster:
-            # Map OL by position: LT, LG, C→CN, RG, RT
+            # Build name→card lookup for OL override resolution
+            ol_name_to_card: Dict[str, PlayerCard] = {
+                p.player_name: p for p in offense.roster.offensive_line
+            }
+            # Apply OL slot overrides first (backup OL subbed into specific slot)
+            _ol_slot_map = {"LT": "LT", "LG": "LG", "C": "CN", "RG": "RG", "RT": "RT"}
+            for slot, cn_slot in _ol_slot_map.items():
+                name = ol_overrides.get(slot)
+                if name and name in ol_name_to_card:
+                    offensive_blockers_by_pos[cn_slot] = ol_name_to_card[name]
+            # Then fill remaining slots from roster order
             for ol in offense.roster.offensive_line:
                 pos = getattr(ol, 'position', '').upper()
                 if pos == "C":
-                    offensive_blockers_by_pos["CN"] = ol
+                    if "CN" not in offensive_blockers_by_pos:
+                        offensive_blockers_by_pos["CN"] = ol
                 elif pos in ("LG", "RG", "LT", "RT"):
-                    offensive_blockers_by_pos[pos] = ol
+                    if pos not in offensive_blockers_by_pos:
+                        offensive_blockers_by_pos[pos] = ol
                 elif pos == "OL":
                     # Generic OL: fill first unfilled standard position
                     for slot in ("LT", "LG", "CN", "RG", "RT"):
                         if slot not in offensive_blockers_by_pos:
                             offensive_blockers_by_pos[slot] = ol
                             break
-            # Map TEs as LE/RE
+            # Map TEs as LE/RE — check skill overrides first
+            all_skill_cards: Dict[str, PlayerCard] = {
+                p.player_name: p
+                for p in (offense.roster.wrs + offense.roster.tes + offense.roster.rbs)
+            }
+            for blocker_slot in ("LE", "RE"):
+                name = skill_overrides.get(blocker_slot)
+                if name and name in all_skill_cards:
+                    offensive_blockers_by_pos[blocker_slot] = all_skill_cards[name]
+            # Fall back to TE roster order for any unset TE blocker slots
             for te in offense.roster.tes:
                 if "LE" not in offensive_blockers_by_pos:
                     offensive_blockers_by_pos["LE"] = te
