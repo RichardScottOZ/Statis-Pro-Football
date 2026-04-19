@@ -36,6 +36,7 @@ export default function App() {
     resetError,
     isHumanTurn,
     isHumanOnDefense,
+    fetchPersonnel,
   } = useGameEngine();
 
   const [phase, setPhase] = useState<GamePhase>('setup');
@@ -116,6 +117,7 @@ export default function App() {
                 onTwoMinuteOffense={declareTwoMinuteOffense}
                 onDownloadGameLog={downloadGameLog}
                 onNewGame={handleNewGame}
+                onRefreshPersonnel={fetchPersonnel}
               />
             )}
           </>
