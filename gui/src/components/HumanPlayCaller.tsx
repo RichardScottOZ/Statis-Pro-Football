@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GameState, HumanPlayCall, PersonnelData } from '../types/game';
 import { OFFENSIVE_STRATEGIES } from '../types/game';
 
@@ -171,17 +171,24 @@ export function HumanPlayCaller({
 
   // When switching to a pass play, auto-select the best healthy receiver
   // (human players must always name a target — there is no FAC auto-select rule).
+  // Use a ref to track previous isPassPlay so we only react to the transition.
+  const prevIsPassPlayRef = useRef(isPassPlay);
   useEffect(() => {
-    if (isPassPlay && !selectedPlayer && defaultReceiver) {
-      setSelectedPlayer(defaultReceiver.name);
+    const wasPassPlay = prevIsPassPlayRef.current;
+    prevIsPassPlayRef.current = isPassPlay;
+    if (isPassPlay && !wasPassPlay) {
+      // Switched TO a pass play — auto-select best receiver if nothing chosen.
+      if (!selectedPlayer && defaultReceiver) {
+        setSelectedPlayer(defaultReceiver.name);
+      }
+    } else if (!isPassPlay && wasPassPlay) {
+      // Switched AWAY from a pass play — clear receiver to avoid it being
+      // misinterpreted as a ball carrier on run plays.
+      if (selectedPlayer) {
+        setSelectedPlayer('');
+      }
     }
-    if (!isPassPlay && selectedPlayer) {
-      // Switching away from pass — clear to avoid carrying a receiver name
-      // into a run play where it would be misinterpreted as a ball carrier.
-      setSelectedPlayer('');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPassPlay]);
+  }, [isPassPlay, selectedPlayer, defaultReceiver]);
 
   // Notify parent whenever the selected ball carrier changes
   useEffect(() => {

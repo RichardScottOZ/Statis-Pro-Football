@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import type {
   GameState,
@@ -65,7 +65,7 @@ export function useGameEngine(): UseGameEngineReturn {
   const [significantEvents, setSignificantEvents] = useState<SignificantEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const eventIdRef = { current: 0 };
+  const eventIdRef = useRef(0);
 
   const addSignificantEvents = useCallback(
     (play: PlayResult, state: GameState) => {
