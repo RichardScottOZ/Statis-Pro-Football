@@ -192,6 +192,7 @@ export interface PersonnelData {
   offense_all: PlayerBrief[];
   defense_all: PlayerBrief[];
   return_specialists?: { KR: PlayerBrief | null; PR: PlayerBrief | null };
+  on_field_assignments?: Record<string, string>;
 }
 
 export interface HumanPlayCall {
