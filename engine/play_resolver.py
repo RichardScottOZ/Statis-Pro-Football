@@ -1611,7 +1611,7 @@ class PlayResolver:
         Authentic 5E resolution:
           1. If Blitz vs Short/Long → always trigger Pass Rush
           2. Check QK/SH/LG receiver target field on FAC card
-          3. If "P.Rush" → check QB pass rush ranges for sack/scramble/INC/COM
+          3. If "P.Rush" → check QB pass rush ranges for sack/scramble/COM
           4. Screen passes use FAC SC field directly
           5. PN → QB card passing ranges → COM / INC / INT
           6. If COM → RUN NUMBER → receiver's pass-gain Q/S/L → yards
@@ -1730,17 +1730,10 @@ class PlayResolver:
                     )
                     r.debug_log = log
                     return r
-                elif pr_result == "INC":
-                    r = PlayResult(
-                        play_type="PASS", yards_gained=0, result="INCOMPLETE",
-                        description=f"{qb.player_name} hurried, pass incomplete",
-                        passer=qb.player_name, z_card_event=z_event,
-                        pass_number_used=pn,
-                    )
-                    r.debug_log = log
-                    return r
-                log.append(f"[P.RUSH] COM despite rush — continue to pass resolution")
-                # pr_result == "COM" → pass completed despite rush, continue
+                log.append(f"[P.RUSH] Pass rush had no effect — continue to pass resolution")
+                # pr_result == "COM" or "INC" (PN outside all rush ranges) →
+                # pass rush failed; per 5E rules there is no "hurried" result,
+                # so play continues to normal pass resolution.
             else:
                 loss = random.choice([-3, -4, -5, -6])
                 log.append(f"[P.RUSH] No QB pass_rush ranges, default sack {loss} yards")
