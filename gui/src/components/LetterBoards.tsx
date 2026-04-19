@@ -518,7 +518,7 @@ function buildSecondarySlots(players: PlayerBrief[], formation?: string): Defens
     'NICKEL': [0, 1, 2, 3, 4],
     'GOAL_LINE': [0, 1, 2, 4],
   };
-  const labels = ['CB', 'SS', 'FS', 'OBOX', 'CB'];
+  const labels = ['CB', 'FS', 'SS', 'OBOX', 'CB'];
   const cbs = players.filter(p => p.position.toUpperCase() === 'CB');
   const strongSafeties = players.filter(p => p.position.toUpperCase() === 'SS');
   const freeSafeties = players.filter(p => p.position.toUpperCase() === 'FS');
