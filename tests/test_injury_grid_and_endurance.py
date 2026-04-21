@@ -222,6 +222,161 @@ class TestImmediateInjurySwap:
         assert fl_player != wr3.player_name, \
             "Backup WR must not appear at both LE and FL"
 
+    def test_rb1_injury_with_3rbs_keeps_rb2_at_bk2_puts_rb3_at_bk1(self):
+        """Regression: RB1 (BK1) injury should bring RB3 (backup) onto the field,
+        NOT displace RB2 (BK2) into the BK1 slot and pull RB3 into BK2.
+
+        Mirrors the WR LE/FL fix: RB has two default starters (BK1 + BK2), so
+        the same search_start = max(injured_idx+1, n_starters) protection applies.
+
+        Before fix: injuring RB1 promoted RB2 to RB1-slot, leaving RB3 to
+        auto-fill BK2 — a bench player appeared on the field as a second back.
+
+        After fix: RB3 fills the vacated BK1 slot; RB2 stays at BK2.
+        """
+        rb1 = _make_rb("Starter_BK1", 20)  # depth-chart RB1 → BK1
+        rb2 = _make_rb("Starter_BK2", 21)  # depth-chart RB2 → BK2
+        rb3 = _make_rb("Backup_RB", 22)    # bench player, must NOT auto-appear
+
+        roster = _build_roster(rbs=[rb1, rb2, rb3])
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+            tes=[_make_te("AwayTE1", 86)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        game = Game(home, away)
+        game.state.possession = "home"
+
+        # Injure RB1 (the BK1 starter) and trigger auto-sub
+        game.state.injuries[rb1.player_name] = 4
+        game._immediate_injury_swap(rb1.player_name)
+
+        # Verify the roster swap used RB3 (true backup), not RB2 (the other starter)
+        assert game.get_offense_team().roster.rbs[0].player_name == rb3.player_name, \
+            "RB3 (backup) should now occupy the RB1 depth-chart slot"
+        assert game.get_offense_team().roster.rbs[1].player_name == rb2.player_name, \
+            "RB2 (Starter_BK2) should remain unchanged in the depth chart"
+
+        # Verify _get_all_receivers assigns the correct slots:
+        # BK1 = RB3 (replaced RB1), BK2 = RB2 (unchanged)
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("BK1") == rb3.player_name, \
+            f"BK1 slot should be {rb3.player_name!r} (backup), got {slots.get('BK1')!r}"
+        assert slots.get("BK2") == rb2.player_name, \
+            f"BK2 slot should remain {rb2.player_name!r}, got {slots.get('BK2')!r}"
+        # The backup is already in BK1; they must NOT also appear as BK2
+        assert slots.get("BK2") != rb3.player_name, \
+            "Backup RB must not appear at both BK1 and BK2"
+
+    def test_rb2_injury_with_3rbs_keeps_rb1_at_bk1_puts_rb3_at_bk2(self):
+        """RB2 (BK2) injury should bring RB3 (backup) into BK2; RB1 stays at BK1."""
+        rb1 = _make_rb("Starter_BK1", 20)
+        rb2 = _make_rb("Starter_BK2", 21)
+        rb3 = _make_rb("Backup_RB", 22)
+
+        roster = _build_roster(rbs=[rb1, rb2, rb3])
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+            tes=[_make_te("AwayTE1", 86)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        game = Game(home, away)
+        game.state.possession = "home"
+
+        game.state.injuries[rb2.player_name] = 4
+        game._immediate_injury_swap(rb2.player_name)
+
+        # RB1 must remain at index 0 (BK1 untouched); RB3 fills RB2's slot
+        assert game.get_offense_team().roster.rbs[0].player_name == rb1.player_name, \
+            "RB1 (Starter_BK1) should remain at index 0"
+        assert game.get_offense_team().roster.rbs[1].player_name == rb3.player_name, \
+            "RB3 (backup) should fill RB2's vacated slot"
+
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("BK1") == rb1.player_name, \
+            f"BK1 should still be {rb1.player_name!r}"
+        assert slots.get("BK2") == rb3.player_name, \
+            f"BK2 should now be {rb3.player_name!r} (backup)"
+
+    def test_qb_injury_swaps_to_backup_no_bench_player_on_field(self):
+        """QB injury promotes QB2; no other position is displaced."""
+        qb1 = _make_qb("Starter_QB", 1)
+        qb2 = _make_qb("Backup_QB", 2)
+
+        roster = _build_roster(qbs=[qb1, qb2])
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+            tes=[_make_te("AwayTE1", 86)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        game = Game(home, away)
+        game.state.possession = "home"
+
+        game.state.injuries[qb1.player_name] = 4
+        game._immediate_injury_swap(qb1.player_name)
+
+        # QB2 should now be at index 0
+        assert game.get_offense_team().roster.qbs[0].player_name == qb2.player_name, \
+            "QB2 (backup) should now occupy the QB1 depth-chart slot"
+        assert game.get_offense_team().roster.qbs[1].player_name == qb1.player_name, \
+            "QB1 (injured) should be at index 1"
+
+        # get_qb() should return QB2
+        qb = game.get_qb()
+        assert qb.player_name == qb2.player_name
+
+    def test_te_injury_promotes_backup_te_to_re_slot(self):
+        """TE1 injury promotes TE2 to the RE slot; LE/FL receivers unchanged."""
+        te1 = _make_te("Starter_TE", 85)
+        te2 = _make_te("Backup_TE", 86)
+        wr1 = _make_wr("WR1", 80)
+        wr2 = _make_wr("WR2", 81)
+
+        roster = _build_roster(tes=[te1, te2], wrs=[wr1, wr2])
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+            tes=[_make_te("AwayTE1", 87)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        game = Game(home, away)
+        game.state.possession = "home"
+
+        game.state.injuries[te1.player_name] = 4
+        game._immediate_injury_swap(te1.player_name)
+
+        # TE2 should now be at index 0 (RE slot)
+        assert game.get_offense_team().roster.tes[0].player_name == te2.player_name, \
+            "TE2 (backup) should now occupy the TE1 depth-chart slot"
+
+        # WR slots (LE, FL) must be unaffected
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("LE") == wr1.player_name, "LE (WR1) should be unchanged"
+        assert slots.get("FL") == wr2.player_name, "FL (WR2) should be unchanged"
+        assert slots.get("RE") == te2.player_name, "RE should now be TE2 (backup)"
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Part 2 — Endurance Enforcement
