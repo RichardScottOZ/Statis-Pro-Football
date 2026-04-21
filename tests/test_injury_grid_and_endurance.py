@@ -172,6 +172,56 @@ class TestImmediateInjurySwap:
         rb = game.get_rb()
         assert rb.player_name == rb2_name
 
+    def test_wr1_injury_with_3wrs_keeps_wr2_at_fl_puts_wr3_at_le(self):
+        """Regression: WR1 (LE) injury should bring WR3 (backup) onto the field,
+        NOT displace WR2 (FL) into the LE slot and pull WR3 into FL.
+
+        Before fix: injuring WR1 promoted WR2 to WR1-slot, leaving WR3 to
+        auto-fill FL — a bench player appeared on the field as the flanker.
+
+        After fix: WR3 fills the vacated LE slot; WR2 stays at FL.
+        """
+        wr1 = _make_wr("Starter_LE", 80)  # depth-chart WR1 → LE
+        wr2 = _make_wr("Starter_FL", 81)  # depth-chart WR2 → FL
+        wr3 = _make_wr("Backup_WR", 82)   # bench player, must NOT auto-appear
+
+        roster = _build_roster(wrs=[wr1, wr2, wr3])
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+            tes=[_make_te("AwayTE1", 86)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        game = Game(home, away)
+        game.state.possession = "home"
+
+        # Injure WR1 (the LE starter) and trigger auto-sub
+        game.state.injuries[wr1.player_name] = 4
+        game._immediate_injury_swap(wr1.player_name)
+
+        # Verify the roster swap used WR3 (true backup), not WR2 (the other starter)
+        assert game.get_offense_team().roster.wrs[0].player_name == wr3.player_name, \
+            "WR3 (backup) should now occupy the WR1 depth-chart slot"
+        assert game.get_offense_team().roster.wrs[1].player_name == wr2.player_name, \
+            "WR2 (Starter_FL) should remain unchanged in the depth chart"
+
+        # Verify _get_all_receivers assigns the correct slots:
+        # LE = WR3 (replaced WR1), FL = WR2 (unchanged)
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("LE") == wr3.player_name, \
+            f"LE slot should be {wr3.player_name!r} (backup), got {slots.get('LE')!r}"
+        assert slots.get("FL") == wr2.player_name, \
+            f"FL slot should remain {wr2.player_name!r}, got {slots.get('FL')!r}"
+        # The backup is already in LE; they must NOT also appear as FL
+        fl_player = slots.get("FL")
+        assert fl_player != wr3.player_name, \
+            "Backup WR must not appear at both LE and FL"
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Part 2 — Endurance Enforcement
