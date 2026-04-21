@@ -300,6 +300,15 @@ class Game:
             "QB": "QB", "RB": "BK1", "WR": "LE", "TE": "RE", "K": "K", "P": "P",
         }
 
+        # Number of default starting slots per position (roster-order, no overrides).
+        # WR: LE (WR1) + FL (WR2) = 2; RB: BK1 + BK2 = 2; TE: RE (TE1) = 1.
+        # When an injured player occupies one of these default starter slots and
+        # there is no explicit on-field override, the replacement is chosen from
+        # the *backup* pool (indices >= n_starters) so the other active starter
+        # is not displaced into a different slot — which would pull a bench player
+        # onto the field to fill the vacated spot.
+        _NUM_DEFAULT_STARTERS: Dict[str, int] = {"WR": 2, "RB": 2, "TE": 1, "QB": 1}
+
         for team in (self.home_team, self.away_team):
             side = "home" if team == self.home_team else "away"
             pos_lists = [
@@ -320,14 +329,46 @@ class Game:
                 if injured_idx is None:
                     continue
 
-                # Find the first healthy backup beyond the injured player's slot
+                # Find the first healthy backup for the injured player.
+                #
+                # When the injured player is a default starter (no explicit
+                # on-field override) AND the position has more than one default
+                # starter, search for the replacement *beyond* the last default
+                # starter slot.  This keeps the other active starter in their
+                # position instead of displacing them into the vacated slot and
+                # inadvertently pulling a bench player onto the field.
+                #
+                # Example (KC WRs: [Rice/LE, Brown/FL, Hardman/bench, ...]):
+                #   Rice (idx=0) injured, no override.
+                #   Old: replacement = Brown (idx=1) → promotes Brown to LE,
+                #        Hardman auto-fills FL — bench player on field (BUG).
+                #   New: search_start = max(1, 2) = 2 → replacement = Hardman,
+                #        Brown stays at FL — correct formation.
+                on_field = self._on_field_offense.get(side, {})
+                has_slot_override = any(
+                    pname == injured_player_name for pname in on_field.values()
+                )
+                n_starters = _NUM_DEFAULT_STARTERS.get(pos, 1)
+                search_start = injured_idx + 1
+                if not has_slot_override and injured_idx < n_starters:
+                    search_start = max(search_start, n_starters)
+
                 replacement = None
                 replacement_idx = None
-                for idx in range(injured_idx + 1, len(players)):
+                for idx in range(search_start, len(players)):
                     if not self._is_player_unavailable(players[idx]):
                         replacement = players[idx]
                         replacement_idx = idx
                         break
+
+                # If no true backup is available, fall back to any healthy player
+                # after the injured slot (e.g. only 2 WRs total and both start).
+                if replacement is None and search_start > injured_idx + 1:
+                    for idx in range(injured_idx + 1, len(players)):
+                        if not self._is_player_unavailable(players[idx]):
+                            replacement = players[idx]
+                            replacement_idx = idx
+                            break
 
                 if replacement is not None and replacement_idx is not None:
                     # Swap the injured player with the healthy backup so the
