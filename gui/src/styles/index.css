@@ -2051,6 +2051,12 @@ body {
   flex-wrap: wrap;
 }
 .two-point-options { margin-top: 0.5rem; }
+.two-point-hint {
+  display: block;
+  font-size: 0.8em;
+  color: #9ca3af;
+  margin-bottom: 4px;
+}
 
 /* ─── Significant Events Panel ─── */
 .significant-events-panel {
