@@ -958,14 +958,13 @@ def execute_two_point_conversion(game_id: str, request: TwoPointConversionReques
         )
 
     try:
-        result = game.execute_two_point_conversion_attempt(
+        result, success = game.execute_two_point_conversion_attempt(
             play_type=request.play_type,
             player_name=request.player_name if request.player_name else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    success = "Two-point conversion GOOD!" in (game.state.play_log[-5:] if game.state.play_log else [])
     result_desc = "Two-point conversion successful!" if success else "Two-point conversion failed"
 
     return {

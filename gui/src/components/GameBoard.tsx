@@ -292,7 +292,7 @@ export function GameBoard({
           </div>
           {showTwoPoint && (
             <div className="two-point-options">
-              <span style={{ fontSize: '0.8em', color: '#aaa', marginBottom: '4px', display: 'block' }}>
+              <span className="two-point-hint">
                 Choose play type for 2-pt attempt from the 2-yard line:
               </span>
               <button className="btn btn-primary btn-sm" onClick={() => { onTwoPointConversion('RUN'); setShowTwoPoint(false); }} disabled={loading}>

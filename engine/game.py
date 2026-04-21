@@ -1032,7 +1032,7 @@ class Game:
 
     def execute_two_point_conversion_attempt(
         self, play_type: str, player_name: Optional[str] = None
-    ) -> "PlayResult":
+    ) -> tuple:
         """Execute a 2-point conversion attempt chosen by the human.
 
         Resolves the play at the 2-yard line using the FAC resolver (without
@@ -1040,7 +1040,7 @@ class Game:
         on success, performs the kickoff, and clears pending_extra_point.
 
         play_type: 'RUN', 'SHORT_PASS', or 'QUICK_PASS'
-        Returns the PlayResult for the conversion attempt.
+        Returns (PlayResult, success: bool).
         """
         if not self.state.pending_extra_point:
             raise ValueError("No pending extra point to resolve")
@@ -1114,7 +1114,7 @@ class Game:
         new_yl = self._kickoff_yard_line(kickoff)
         self._change_possession(new_yl)
 
-        return result
+        return result, success
 
     def _score_safety(self) -> None:
         """Score a safety — 2 points for the defense.
