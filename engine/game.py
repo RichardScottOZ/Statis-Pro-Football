@@ -200,16 +200,21 @@ class Game:
         )
         self._log_kickoff(kickoff_result)
 
-        if kickoff_result.is_touchdown or kickoff_result.result == "TD":
-            # Kickoff return TD: score, attempt XP, then kick off again
-            self._score_touchdown()
-            followup_kickoff = self._do_kickoff(
-                kicking_team=self.get_offense_team(),
-                receiving_team=self.get_defense_team(),
-            )
-            self._log_kickoff(followup_kickoff)
-            new_yl = self._kickoff_yard_line(followup_kickoff)
-            self._change_possession(new_yl)
+        if kickoff_result.is_touchdown or kickoff_result.result == "KR_TD":
+            # Receiving team returned the opening kickoff for a TD.
+            # Possession is already on the receiving (scoring) team.
+            scorer_is_ai = (self.solitaire_home if self.state.possession == "home"
+                            else self.solitaire_away)
+            if scorer_is_ai:
+                self._score_touchdown()
+                followup_kickoff = self._do_kickoff(
+                    kicking_team=self.get_offense_team(),
+                    receiving_team=self.get_defense_team(),
+                )
+                self._process_kickoff_result(followup_kickoff)
+            else:
+                # Human scored the opening KR TD; pause for PAT/2-pt choice
+                self._score_td_only()
         else:
             start_yard = self._kickoff_yard_line(kickoff_result)
             self.state.yard_line = start_yard
@@ -724,6 +729,38 @@ class Game:
         if kickoff.debug_log:
             for entry in kickoff.debug_log:
                 self.state.play_log.append(f"    {entry}")
+
+    def _process_kickoff_result(self, kickoff: PlayResult) -> None:
+        """Log a kickoff and apply its result to the game state.
+
+        Handles kick-return touchdowns: the receiving team scores 6 points,
+        the game pauses for PAT/2-pt choice if that team is human-controlled,
+        or auto-resolves the PAT and kicks off again if AI-controlled.
+
+        Call this method when the KICKING team currently has possession.
+        """
+        self._log_kickoff(kickoff)
+        if kickoff.is_touchdown or kickoff.result == "KR_TD":
+            # Receiving team returned the kickoff for a TD.
+            # Swap possession so the scoring (receiving) team is now the offense.
+            # yard_line=99 is a placeholder overridden after the PAT+kickoff.
+            self._change_possession(99)
+            scorer_is_ai = (self.solitaire_home if self.state.possession == "home"
+                            else self.solitaire_away)
+            if scorer_is_ai:
+                self._score_touchdown()
+                ko2 = self._do_kickoff(
+                    kicking_team=self.get_offense_team(),
+                    receiving_team=self.get_defense_team(),
+                )
+                self._log_kickoff(ko2)
+                self._change_possession(self._kickoff_yard_line(ko2))
+            else:
+                # Human scored the KR TD; sets pending_extra_point=True so the
+                # player must call /pat-kick or /two-point-conversion next.
+                self._score_td_only()
+        else:
+            self._change_possession(self._kickoff_yard_line(kickoff))
 
     def _kickoff_yard_line(self, kickoff: PlayResult) -> int:
         """Extract the starting yard line from a kickoff result."""
@@ -1291,9 +1328,7 @@ class Game:
             kicking_team=self.get_offense_team(),
             receiving_team=self.get_defense_team(),
         )
-        self._log_kickoff(kickoff)
-        new_yl = self._kickoff_yard_line(kickoff)
-        self._change_possession(new_yl)
+        self._process_kickoff_result(kickoff)
 
         return xp
 
@@ -1377,9 +1412,7 @@ class Game:
             kicking_team=self.get_offense_team(),
             receiving_team=self.get_defense_team(),
         )
-        self._log_kickoff(kickoff)
-        new_yl = self._kickoff_yard_line(kickoff)
-        self._change_possession(new_yl)
+        self._process_kickoff_result(kickoff)
 
         return result, success
 
@@ -1563,6 +1596,27 @@ class Game:
         result = PlayResult("PUNT", net_punt, "PUNT", description=desc)
         result.debug_log = return_info.get("log_entries", [])
 
+        if is_td:
+            # Receiving team returned the punt for a TD.
+            # Swap possession so the scoring (receiving) team is now the offense,
+            # then handle scoring + PAT/kickoff exactly like any other TD.
+            result.is_touchdown = True
+            self._change_possession(99)  # placeholder; overridden after PAT+kickoff
+            scorer_is_ai = (self.solitaire_home if self.state.possession == "home"
+                            else self.solitaire_away)
+            if scorer_is_ai:
+                self._score_touchdown()
+                kickoff = self._do_kickoff(
+                    kicking_team=self.get_offense_team(),
+                    receiving_team=self.get_defense_team(),
+                )
+                self._process_kickoff_result(kickoff)
+            else:
+                # Human scored the punt-return TD; sets pending_extra_point=True
+                # so the player must call /pat-kick or /two-point-conversion next.
+                self._score_td_only()
+            return result
+
         if is_fumble and fumble_lost:
             result.turnover = True
             result.turnover_type = "FUMBLE"
@@ -1588,9 +1642,7 @@ class Game:
                         kicking_team=self.get_offense_team(),
                         receiving_team=self.get_defense_team(),
                     )
-                    self._log_kickoff(kickoff)
-                    new_yl = self._kickoff_yard_line(kickoff)
-                    self._change_possession(new_yl)
+                    self._process_kickoff_result(kickoff)
                 else:
                     # Human scored the pick-six; sets pending_extra_point=True so
                     # the player must call /pat-kick or /two-point-conversion next,
@@ -1789,10 +1841,25 @@ class Game:
                         receiving_team=self.get_offense_team(),
                     )
                     self._log_kickoff(kickoff, prefix="Second half kickoff: ")
-                    new_yl = self._kickoff_yard_line(kickoff)
-                    self.state.yard_line = new_yl
-                    self.state.down = 1
-                    self.state.distance = 10
+                    if kickoff.is_touchdown or kickoff.result == "KR_TD":
+                        # Receiving team returned the second-half kickoff for a TD.
+                        # Possession is already on the receiving (scoring) team.
+                        scorer_is_ai = (self.solitaire_home if self.state.possession == "home"
+                                        else self.solitaire_away)
+                        if scorer_is_ai:
+                            self._score_touchdown()
+                            ko2 = self._do_kickoff(
+                                kicking_team=self.get_offense_team(),
+                                receiving_team=self.get_defense_team(),
+                            )
+                            self._process_kickoff_result(ko2)
+                        else:
+                            self._score_td_only()
+                    else:
+                        new_yl = self._kickoff_yard_line(kickoff)
+                        self.state.yard_line = new_yl
+                        self.state.down = 1
+                        self.state.distance = 10
 
     # ── 5th-Edition FAC-card-based play execution ────────────────────
 
@@ -2247,9 +2314,7 @@ class Game:
                             kicking_team=self.get_offense_team(),
                             receiving_team=self.get_defense_team(),
                         )
-                        self._log_kickoff(kickoff)
-                        new_yl = self._kickoff_yard_line(kickoff)
-                        self._change_possession(new_yl)
+                        self._process_kickoff_result(kickoff)
                     else:
                         # Human scored — pause so the player can choose PAT or 2-pt
                         self._score_td_only()
@@ -2410,9 +2475,7 @@ class Game:
                     kicking_team=self.get_offense_team(),
                     receiving_team=self.get_defense_team(),
                 )
-                self._log_kickoff(kickoff)
-                new_yl = self._kickoff_yard_line(kickoff)
-                self._change_possession(new_yl)
+                self._process_kickoff_result(kickoff)
             else:
                 # Human scored — pause so the player can choose PAT or 2-pt
                 self._score_td_only()
@@ -2435,9 +2498,7 @@ class Game:
                     kicking_team=self.get_offense_team(),
                     receiving_team=self.get_defense_team(),
                 )
-                self._log_kickoff(kickoff)
-                new_yl = self._kickoff_yard_line(kickoff)
-                self._change_possession(new_yl)
+                self._process_kickoff_result(kickoff)
             else:
                 # Missed FG: opponent gets ball at spot of kick or 20
                 opp_yl = max(20, 100 - self.state.yard_line - 7)
@@ -2965,9 +3026,7 @@ class Game:
                 kicking_team=self.get_offense_team(),
                 receiving_team=self.get_defense_team(),
             )
-            self._log_kickoff(kickoff)
-            new_yl = self._kickoff_yard_line(kickoff)
-            self._change_possession(new_yl)
+            self._process_kickoff_result(kickoff)
         else:
             self._advance_down(result.yards_gained)
             if self.state.down > 4:
@@ -2998,9 +3057,7 @@ class Game:
                 kicking_team=self.get_offense_team(),
                 receiving_team=self.get_defense_team(),
             )
-            self._log_kickoff(kickoff)
-            new_yl = self._kickoff_yard_line(kickoff)
-            self._change_possession(new_yl)
+            self._process_kickoff_result(kickoff)
         else:
             self._advance_down(result.yards_gained)
             if self.state.down > 4:
