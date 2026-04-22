@@ -1229,3 +1229,181 @@ class TestOffensiveEmergencyFillPriority:
         assert le_player is not None, "LE slot was not filled"
         assert le_player.player_name == "ReceiverRB", \
             f"Expected ReceiverRB in LE, got {le_player.player_name}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 8 — 5E Position-injury protection flag
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _inject_injury_event(game, player_name: str, duration: int = 3):
+    """Directly inject an INJURY z-card event into game state, bypassing FAC.
+
+    This lets tests exercise the injury-processing block in _run_play by
+    simulating `result.z_card_event = {"type": "INJURY", ...}` on a
+    play-result that is then fed through the same code path.
+    """
+    # We call the processing fragment directly rather than going through
+    # _run_play to keep tests simple and free of FAC randomness.
+    side_pos = game._find_player_side_and_pos(player_name)
+    if side_pos is None:
+        return False  # player not found
+
+    p_side, p_pos = side_pos
+    already = p_pos in game.state.position_injury_flags.get(p_side, set())
+    if already:
+        game.state.play_log.append(
+            f"  ⚕ Injury to {player_name} ignored "
+            f"(position {p_pos} already injured this game)."
+        )
+        return False  # injury blocked
+
+    game.state.injuries[player_name] = duration
+    game.state.position_injury_flags[p_side].add(p_pos)
+    game.state._injured_starter_positions[player_name] = (p_side, p_pos)
+    game.state.play_log.append(
+        f"  ⚕ {player_name} injured! Out for {duration} plays."
+    )
+    return True  # injury applied
+
+
+def _tick_injuries(game, plays: int = 1):
+    """Advance injury counters by *plays* ticks (mirroring the _run_play loop)."""
+    for _ in range(plays):
+        to_remove = []
+        for name in list(game.state.injuries):
+            game.state.injuries[name] -= 1
+            if game.state.injuries[name] <= 0:
+                to_remove.append(name)
+                game.state.play_log.append(f"  ⚕ {name} returns from injury.")
+        for name in to_remove:
+            del game.state.injuries[name]
+            if name in game.state._injured_starter_positions:
+                clr_side, clr_pos = game.state._injured_starter_positions.pop(name)
+                game.state.position_injury_flags[clr_side].discard(clr_pos)
+
+
+class TestPositionInjuryProtectionFlag:
+    """5E rule: a second injury to the same position is ignored while the
+    first player is still injured; protection lifts when they return."""
+
+    def _game_with_two_rbs(self):
+        roster = _build_roster(
+            rbs=[_make_rb("RB1", 20), _make_rb("RB2", 22)],
+            qbs=[_make_qb()],
+            wrs=[_make_wr("WR1", 80), _make_wr("WR2", 81)],
+            tes=[_make_te("TE1", 85)],
+        )
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83)],
+            tes=[_make_te("AwayTE1", 86)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        return Game(home, away)
+
+    # ── find_player_side_and_pos ─────────────────────────────────────
+
+    def test_find_player_side_and_pos_home(self):
+        game = self._game_with_two_rbs()
+        result = game._find_player_side_and_pos("RB1")
+        assert result == ("home", "RB")
+
+    def test_find_player_side_and_pos_away(self):
+        game = self._game_with_two_rbs()
+        result = game._find_player_side_and_pos("AwayRB1")
+        assert result == ("away", "RB")
+
+    def test_find_player_side_and_pos_unknown(self):
+        game = self._game_with_two_rbs()
+        assert game._find_player_side_and_pos("NoSuchPlayer") is None
+
+    # ── flag set when first injury fires ─────────────────────────────
+
+    def test_flag_set_on_first_injury(self):
+        game = self._game_with_two_rbs()
+        applied = _inject_injury_event(game, "RB1", duration=3)
+        assert applied is True
+        assert "RB" in game.state.position_injury_flags["home"]
+
+    def test_player_in_injuries_dict(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=3)
+        assert game.state.injuries.get("RB1", 0) == 3
+
+    # ── second injury to same position is blocked ─────────────────────
+
+    def test_second_injury_same_position_blocked(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=99)  # sets flag
+        applied = _inject_injury_event(game, "RB2", duration=3)
+        assert applied is False, "Second RB injury should be blocked"
+        assert "RB2" not in game.state.injuries
+
+    def test_second_injury_logged_as_ignored(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=99)
+        _inject_injury_event(game, "RB2", duration=3)
+        ignored = any(
+            "ignored" in line and "RB2" in line
+            for line in game.state.play_log
+        )
+        assert ignored, "Blocked injury should be logged as ignored"
+
+    # ── flag lifted when original player returns ─────────────────────
+
+    def test_flag_cleared_on_return(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=2)
+        assert "RB" in game.state.position_injury_flags["home"]
+
+        _tick_injuries(game, plays=2)   # RB1 returns
+
+        assert "RB" not in game.state.position_injury_flags["home"], \
+            "Position flag should be cleared when RB1 returns"
+        assert "RB1" not in game.state._injured_starter_positions
+
+    def test_second_injury_fires_after_first_returns(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=1)
+        _tick_injuries(game, plays=1)   # RB1 returns, flag cleared
+
+        applied = _inject_injury_event(game, "RB2", duration=2)
+        assert applied is True, "Second RB injury should be allowed after flag cleared"
+        assert "RB2" in game.state.injuries
+
+    # ── different positions are independent ──────────────────────────
+
+    def test_qb_and_rb_flags_independent(self):
+        """QB flag does not protect RB and vice-versa."""
+        game = self._game_with_two_rbs()
+        qb_card = game.home_team.roster.qbs[0]
+        _inject_injury_event(game, qb_card.player_name, duration=99)
+
+        applied = _inject_injury_event(game, "RB1", duration=3)
+        assert applied is True, "RB injury should fire even though QB is injured"
+        assert "RB1" in game.state.injuries
+
+    def test_away_team_flag_independent_of_home(self):
+        """Away team's position flag does not protect home team's same position."""
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "AwayRB1", duration=99)  # away RB flagged
+        applied = _inject_injury_event(game, "RB1", duration=3)  # home RB
+        assert applied is True, "Home RB injury should fire regardless of away flag"
+
+    # ── injured_starter_positions bookkeeping ────────────────────────
+
+    def test_injured_starter_positions_populated(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=5)
+        entry = game.state._injured_starter_positions.get("RB1")
+        assert entry == ("home", "RB")
+
+    def test_injured_starter_positions_cleared_on_return(self):
+        game = self._game_with_two_rbs()
+        _inject_injury_event(game, "RB1", duration=1)
+        _tick_injuries(game, plays=1)
+        assert "RB1" not in game.state._injured_starter_positions

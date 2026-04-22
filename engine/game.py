@@ -85,6 +85,18 @@ class GameState:
     is_over: bool = False
     # 5E: Injury tracking - {player_name: plays_remaining}
     injuries: Dict[str, int] = field(default_factory=dict)
+    # 5E: Position injury protection flags (per team).
+    # When a starter is injured, their position is flagged so that a second
+    # injury to the same position is ignored for the rest of the game.
+    # The flag is cleared once the original injured player becomes eligible
+    # to return (their injury counter expires).
+    # Format: {"home": {"CB", "QB", ...}, "away": {"RB", ...}}
+    position_injury_flags: Dict[str, Set[str]] = field(
+        default_factory=lambda: {"home": set(), "away": set()}
+    )
+    # Maps injured player name → (team_side, position) so the position flag
+    # can be cleared when that player's injury counter expires.
+    _injured_starter_positions: Dict[str, tuple] = field(default_factory=dict)
     # 5E: Track last play's ball carrier for endurance
     last_ball_carrier: Optional[str] = None
     prev_ball_carrier: Optional[str] = None  # Two plays ago for endurance 2
@@ -232,6 +244,20 @@ class Game:
 
     def _is_player_unavailable(self, player: Optional[PlayerCard]) -> bool:
         return bool(player and self.state.injuries.get(player.player_name, 0) > 0)
+
+    def _find_player_side_and_pos(
+        self, player_name: str
+    ) -> Optional[tuple]:
+        """Return (team_side, position) for *player_name*, or None if not found.
+
+        Searches both teams' full rosters.  Used by the position-injury
+        protection logic to determine which team flag to set/clear.
+        """
+        for team, side in ((self.home_team, "home"), (self.away_team, "away")):
+            for card in team.roster.all_players():
+                if card.player_name == player_name:
+                    return (side, card.position.upper())
+        return None
 
     def _record_personnel_note(self, note: Optional[str]) -> None:
         if not note:
@@ -2249,15 +2275,44 @@ class Game:
             duration = result.z_card_event.get("injury_duration", 2)
             injured_player = result.rusher or result.receiver or result.passer
             if injured_player:
-                self.state.injuries[injured_player] = duration
-                result.injury_player = injured_player
-                result.injury_duration = duration
-                self.state.play_log.append(
-                    f"  ⚕ {injured_player} injured! Out for {duration} plays."
-                )
-                # Immediately swap injured player out of the starter slot so
-                # the formation grid and personnel views reflect the change.
-                self._immediate_injury_swap(injured_player)
+                # 5E position-injury protection:
+                # "If a position has already been hit by an injury, a second
+                # injury to that position is ignored."  Find the player's team
+                # and position, then check whether that position is currently
+                # flagged for that team.
+                side_pos = self._find_player_side_and_pos(injured_player)
+                if side_pos:
+                    p_side, p_pos = side_pos
+                    already_flagged = (
+                        p_pos in self.state.position_injury_flags.get(p_side, set())
+                    )
+                else:
+                    already_flagged = False
+                    p_side = None
+                    p_pos = None
+
+                if already_flagged:
+                    # Rule: ignore the second injury — the position is protected.
+                    self.state.play_log.append(
+                        f"  ⚕ Injury to {injured_player} ignored "
+                        f"(position {p_pos} already injured this game)."
+                    )
+                else:
+                    # Process the injury normally and set the position flag.
+                    self.state.injuries[injured_player] = duration
+                    result.injury_player = injured_player
+                    result.injury_duration = duration
+                    self.state.play_log.append(
+                        f"  ⚕ {injured_player} injured! Out for {duration} plays."
+                    )
+                    if p_side and p_pos:
+                        self.state.position_injury_flags[p_side].add(p_pos)
+                        self.state._injured_starter_positions[injured_player] = (
+                            p_side, p_pos
+                        )
+                    # Immediately swap injured player out of the starter slot so
+                    # the formation grid and personnel views reflect the change.
+                    self._immediate_injury_swap(injured_player)
 
         # ── 5E Z-card penalty resolution ─────────────────────────────
         if result.z_card_event and result.z_card_event.get("type") == "PENALTY":
@@ -2297,7 +2352,7 @@ class Game:
                 result.yards_gained, result.play_type
             )
 
-        # Tick injury counters
+        # Tick injury counters; clear position-injury flags when players return
         to_remove = []
         for name in list(self.state.injuries):
             self.state.injuries[name] -= 1
@@ -2306,6 +2361,12 @@ class Game:
                 self.state.play_log.append(f"  ⚕ {name} returns from injury.")
         for name in to_remove:
             del self.state.injuries[name]
+            # Clear the position-injury flag so future injuries at this
+            # position are enforced again (rule: protection ends when the
+            # originally injured player is eligible to return).
+            if name in self.state._injured_starter_positions:
+                clr_side, clr_pos = self.state._injured_starter_positions.pop(name)
+                self.state.position_injury_flags[clr_side].discard(clr_pos)
 
         # Track player stats
         self._track_play_stats(result)
