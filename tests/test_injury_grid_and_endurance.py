@@ -378,6 +378,310 @@ class TestImmediateInjurySwap:
         assert slots.get("RE") == te2.player_name, "RE should now be TE2 (backup)"
 
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 1b — 2TE / 3TE (JUMBO) Formation Injury Swap
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_game_multi_te(wrs, tes, extra_te_backup=None):
+    """Build a Game configured for multi-TE formation testing."""
+    all_tes = list(tes)
+    if extra_te_backup:
+        all_tes.append(extra_te_backup)
+    roster = _build_roster(wrs=wrs, tes=all_tes)
+    home = Team(abbreviation="HOM", city="Home", name="Tester",
+                conference="AFC", division="North", roster=roster)
+    away_roster = _build_roster(
+        rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+        qbs=[_make_qb("AwayQB", 12)],
+        wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+        tes=[_make_te("AwayTE1", 90)],
+    )
+    away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                conference="NFC", division="South", roster=away_roster)
+    game = Game(home, away)
+    game.state.possession = "home"
+    return game
+
+
+class TestMultiTEFormationInjurySwap:
+    """Verify _immediate_injury_swap is correct for 2TE and 3TE/JUMBO packages.
+
+    Root cause of the bug: when a formation package puts N TEs on the field
+    via explicit overrides and one of them is injured, the old code searched
+    from injured_idx+1 — finding another on-field TE — and redirected the
+    injured player's override slot to that on-field TE.  The on-field TE's own
+    slot override was still in place, so _get_all_receivers assigned it to two
+    slots simultaneously (double-assignment).
+
+    Fix: when has_slot_override=True and multiple players of the same position
+    are in on_field_offense, skip ALL of them and pull the first healthy bench
+    player instead.
+    """
+
+    # ── 2TE_1WR package ──────────────────────────────────────────────
+
+    def test_2te_package_te1_injury_keeps_te2_at_fl_puts_te3_at_re(self):
+        """2TE_1WR: TE1 (RE) injury brings TE3 (backup) to RE; TE2 stays at FL."""
+        wr1 = _make_wr("WR1", 80)
+        te1 = _make_te("TE1_RE", 85)   # RE starter
+        te2 = _make_te("TE2_FL", 86)   # FL starter (on field)
+        te3 = _make_te("TE3_bench", 87)  # bench — should fill
+
+        game = _build_game_multi_te([wr1], [te1, te2], extra_te_backup=te3)
+        # Apply 2TE_1WR: WR1→LE, TE1→RE, TE2→FL
+        game.apply_formation_package("home", "2TE_1WR")
+
+        # Confirm package is set correctly
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("LE") == wr1.player_name
+        assert overrides.get("RE") == te1.player_name
+        assert overrides.get("FL") == te2.player_name
+
+        # Injure TE1 (RE)
+        game.state.injuries[te1.player_name] = 4
+        game._immediate_injury_swap(te1.player_name)
+
+        # TE3 should be promoted into TE1's depth-chart slot
+        tes_roster = game.get_offense_team().roster.tes
+        assert tes_roster[0].player_name == te3.player_name, \
+            "TE3 (backup) should be at index 0 after swap"
+        assert tes_roster[1].player_name == te2.player_name, \
+            "TE2 should remain at index 1 (unchanged)"
+
+        # Override for RE should now point to TE3; FL stays TE2
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te3.player_name, \
+            f"RE override should be TE3 (backup), got {overrides.get('RE')!r}"
+        assert overrides.get("FL") == te2.player_name, \
+            f"FL override must remain TE2 (on-field starter), got {overrides.get('FL')!r}"
+
+        # _get_all_receivers must not double-assign TE2
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("RE") == te3.player_name, \
+            f"RE slot should be TE3, got {slots.get('RE')!r}"
+        assert slots.get("FL") == te2.player_name, \
+            f"FL slot should still be TE2, got {slots.get('FL')!r}"
+        # Exactly one slot per player — TE2 must NOT appear twice
+        player_names = [n for n in slots.values()]
+        assert player_names.count(te2.player_name) == 1, \
+            "TE2 must not be assigned to two slots"
+
+    def test_2te_package_te2_injury_keeps_te1_at_re_puts_te3_at_fl(self):
+        """2TE_1WR: TE2 (FL) injury brings TE3 (backup) to FL; TE1 stays at RE."""
+        wr1 = _make_wr("WR1", 80)
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_FL", 86)
+        te3 = _make_te("TE3_bench", 87)
+
+        game = _build_game_multi_te([wr1], [te1, te2], extra_te_backup=te3)
+        game.apply_formation_package("home", "2TE_1WR")
+
+        game.state.injuries[te2.player_name] = 4
+        game._immediate_injury_swap(te2.player_name)
+
+        tes_roster = game.get_offense_team().roster.tes
+        assert tes_roster[0].player_name == te1.player_name, \
+            "TE1 should remain at index 0"
+        assert tes_roster[1].player_name == te3.player_name, \
+            "TE3 (backup) should fill TE2's vacated slot"
+
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te1.player_name, "RE stays TE1"
+        assert overrides.get("FL") == te3.player_name, "FL updated to TE3"
+
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("RE") == te1.player_name
+        assert slots.get("FL") == te3.player_name
+        assert slots.get("LE") == wr1.player_name
+
+    def test_2te_package_wr_injury_only_affects_le_slot(self):
+        """2TE_1WR: WR1 (LE) injury should not disturb TE1/TE2 assignments."""
+        wr1 = _make_wr("WR1_LE", 80)
+        wr2 = _make_wr("WR2_bench", 81)   # backup WR for LE
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_FL", 86)
+
+        roster = _build_roster(wrs=[wr1, wr2], tes=[te1, te2])
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+            tes=[_make_te("AwayTE1", 90)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        game = Game(home, away)
+        game.state.possession = "home"
+        game.apply_formation_package("home", "2TE_1WR")
+
+        game.state.injuries[wr1.player_name] = 4
+        game._immediate_injury_swap(wr1.player_name)
+
+        overrides = game._on_field_offense["home"]
+        # LE override redirected to WR2; TE slots unchanged
+        assert overrides.get("LE") == wr2.player_name, "LE should now be WR2"
+        assert overrides.get("RE") == te1.player_name, "RE unchanged"
+        assert overrides.get("FL") == te2.player_name, "FL unchanged"
+
+    # ── 3TE / JUMBO package ──────────────────────────────────────────
+
+    def test_3te_te1_injury_keeps_te2_le_te3_fl_puts_te4_at_re(self):
+        """3TE: TE1 (RE) injury brings TE4 (backup) to RE; TE2/TE3 stay at LE/FL.
+
+        This is the core bug scenario — without the fix, TE2 would be moved
+        into RE and double-assigned (both RE and LE overrides pointing to TE2).
+        """
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_LE", 86)
+        te3 = _make_te("TE3_FL", 87)
+        te4 = _make_te("TE4_bench", 88)   # true backup, must fill
+
+        game = _build_game_multi_te([], [te1, te2, te3], extra_te_backup=te4)
+        game.apply_formation_package("home", "3TE")
+
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te1.player_name
+        assert overrides.get("LE") == te2.player_name
+        assert overrides.get("FL") == te3.player_name
+
+        game.state.injuries[te1.player_name] = 4
+        game._immediate_injury_swap(te1.player_name)
+
+        tes_roster = game.get_offense_team().roster.tes
+        assert tes_roster[0].player_name == te4.player_name, \
+            "TE4 (backup) should move to index 0"
+
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te4.player_name, \
+            f"RE must point to TE4 (backup), got {overrides.get('RE')!r}"
+        assert overrides.get("LE") == te2.player_name, "LE must remain TE2"
+        assert overrides.get("FL") == te3.player_name, "FL must remain TE3"
+
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("RE") == te4.player_name
+        assert slots.get("LE") == te2.player_name
+        assert slots.get("FL") == te3.player_name
+        # No player appears in two slots
+        names = list(slots.values())
+        assert len(names) == len(set(names)), \
+            "Each player must appear in exactly one slot"
+
+    def test_3te_te2_injury_keeps_te1_re_te3_fl_puts_te4_at_le(self):
+        """3TE: TE2 (LE) injury brings TE4 (backup) to LE; TE1/TE3 stay."""
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_LE", 86)
+        te3 = _make_te("TE3_FL", 87)
+        te4 = _make_te("TE4_bench", 88)
+
+        game = _build_game_multi_te([], [te1, te2, te3], extra_te_backup=te4)
+        game.apply_formation_package("home", "3TE")
+
+        game.state.injuries[te2.player_name] = 4
+        game._immediate_injury_swap(te2.player_name)
+
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te1.player_name, "RE must remain TE1"
+        assert overrides.get("LE") == te4.player_name, \
+            f"LE must be TE4 (backup), got {overrides.get('LE')!r}"
+        assert overrides.get("FL") == te3.player_name, "FL must remain TE3"
+
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("RE") == te1.player_name
+        assert slots.get("LE") == te4.player_name
+        assert slots.get("FL") == te3.player_name
+        names = list(slots.values())
+        assert len(names) == len(set(names)), "No player double-assigned"
+
+    def test_3te_te3_injury_keeps_te1_re_te2_le_puts_te4_at_fl(self):
+        """3TE: TE3 (FL) injury brings TE4 (backup) to FL; TE1/TE2 stay."""
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_LE", 86)
+        te3 = _make_te("TE3_FL", 87)
+        te4 = _make_te("TE4_bench", 88)
+
+        game = _build_game_multi_te([], [te1, te2, te3], extra_te_backup=te4)
+        game.apply_formation_package("home", "3TE")
+
+        game.state.injuries[te3.player_name] = 4
+        game._immediate_injury_swap(te3.player_name)
+
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te1.player_name, "RE must remain TE1"
+        assert overrides.get("LE") == te2.player_name, "LE must remain TE2"
+        assert overrides.get("FL") == te4.player_name, \
+            f"FL must be TE4 (backup), got {overrides.get('FL')!r}"
+
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        assert slots.get("FL") == te4.player_name
+        names = list(slots.values())
+        assert len(names) == len(set(names)), "No player double-assigned"
+
+    def test_jumbo_te1_injury_is_equivalent_to_3te(self):
+        """JUMBO package uses same slot logic as 3TE — same fix applies."""
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_LE", 86)
+        te3 = _make_te("TE3_FL", 87)
+        te4 = _make_te("TE4_bench", 88)
+
+        game = _build_game_multi_te([], [te1, te2, te3], extra_te_backup=te4)
+        game.apply_formation_package("home", "JUMBO")
+
+        game.state.injuries[te1.player_name] = 4
+        game._immediate_injury_swap(te1.player_name)
+
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") == te4.player_name, \
+            f"RE must be TE4 (backup) after JUMBO TE1 injury, got {overrides.get('RE')!r}"
+        assert overrides.get("LE") == te2.player_name, "LE must remain TE2"
+        assert overrides.get("FL") == te3.player_name, "FL must remain TE3"
+
+        receivers = game._get_all_receivers()
+        slots = {getattr(r, "_formation_slot", None): r.player_name for r in receivers}
+        names = list(slots.values())
+        assert len(names) == len(set(names)), "No player double-assigned in JUMBO"
+
+    def test_3te_no_backup_falls_back_to_next_healthy_te(self):
+        """3TE with only 3 TEs (no bench): emergency fallback when backup pool is empty.
+
+        The fix skips all on-field TEs when searching for a replacement.  If
+        there are no TEs beyond index 2, the existing fallback loop (which
+        retries from injured_idx+1) picks the next healthy on-field TE as a
+        last resort.  This means one TE will momentarily hold two override
+        slots — which is unavoidable when the roster is exhausted.  The key
+        guarantee is: (1) no crash, (2) the injured player is removed from
+        the RE override so play logic doesn't try to call plays for them.
+        """
+        te1 = _make_te("TE1_RE", 85)
+        te2 = _make_te("TE2_LE", 86)
+        te3 = _make_te("TE3_FL", 87)  # no TE4; roster is exhausted
+
+        game = _build_game_multi_te([], [te1, te2, te3])
+        game.apply_formation_package("home", "3TE")
+
+        game.state.injuries[te1.player_name] = 4
+        # Should not raise; fallback picks te2 (next healthy TE)
+        game._immediate_injury_swap(te1.player_name)
+
+        # The injured player must be removed from the RE override
+        overrides = game._on_field_offense["home"]
+        assert overrides.get("RE") is not None, \
+            "RE override must be set even when no true backup exists"
+        assert overrides.get("RE") != te1.player_name, \
+            "Injured TE1 must not remain in the RE override"
+        # In the no-backup case the emergency fallback reuses an on-field TE,
+        # so double-assignment is acceptable and intentional.
+        assert overrides.get("RE") in (te2.player_name, te3.player_name), \
+            "Emergency fill must be one of the remaining healthy on-field TEs"
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Part 2 — Endurance Enforcement
 # ═════════════════════════════════════════════════════════════════════════════

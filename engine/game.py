@@ -350,7 +350,32 @@ class Game:
                 )
                 n_starters = _NUM_DEFAULT_STARTERS.get(pos, 1)
                 search_start = injured_idx + 1
-                if not has_slot_override and injured_idx < n_starters:
+                if has_slot_override:
+                    # In a package formation (2TE_1WR, 3TE/JUMBO, 3RB, …),
+                    # multiple players of the same position may be on the field
+                    # via explicit slot overrides.  Skip *all* of them so the
+                    # replacement is a true bench player rather than another
+                    # active starter who would then be double-assigned to two
+                    # formation slots.
+                    #
+                    # Example (3TE/JUMBO: RE=TE1, LE=TE2, FL=TE3):
+                    #   TE1 (idx=0) injured, has_slot_override=True.
+                    #   Old: search_start=1 → replacement=TE2 (on-field!)
+                    #        → override becomes RE=TE2 AND LE=TE2 (double-assign BUG).
+                    #   New: last_on_field_idx=2 → search_start=3 → TE4 fills RE,
+                    #        TE2 stays at LE, TE3 stays at FL — correct formation.
+                    on_field_names_for_pos = {
+                        pname for pname in on_field.values()
+                        if any(pl.player_name == pname for pl in players)
+                    }
+                    if len(on_field_names_for_pos) > 1:
+                        last_on_field_idx = max(
+                            (i for i, pl in enumerate(players)
+                             if pl.player_name in on_field_names_for_pos),
+                            default=injured_idx,
+                        )
+                        search_start = max(search_start, last_on_field_idx + 1)
+                elif injured_idx < n_starters:
                     search_start = max(search_start, n_starters)
 
                 replacement = None
@@ -689,7 +714,7 @@ class Game:
         Supported packages
         ------------------
         ``STANDARD``  — clear all overrides (fall back to roster order).
-        ``2TE_1WR``   — WR1→LE, WR2→FL, TE1→RE (default with explicit mapping).
+        ``2TE_1WR``   — WR1→LE, TE1→RE, TE2→FL (two-tight-end set with one wide receiver).
         ``3TE``       — TE1→RE, TE2→LE, TE3→FL (three tight-end set).
         ``JUMBO``     — same as 3TE but logged as Jumbo package.
         ``4WR``       — WR1→LE, WR2→FL, WR3→RE, no TE on field.
@@ -753,14 +778,18 @@ class Game:
             else:
                 msg = f"PACKAGE: 4WR ({side}) — not enough WRs (need 3, have {len(wrs)})"
         elif package == "2TE_1WR":
-            # WR1→LE, WR2→FL, TE1→RE
+            # WR1→LE (split end on line), TE1→RE (primary TE on line),
+            # TE2→FL (second TE split off the line as flanker).
+            # This is the classic "double tight-end" or "two-TE" set used by
+            # power running teams.  It is distinct from the standard 2WR+1TE
+            # formation — both tight ends are active skill targets.
             new_overrides: Dict[str, str] = {}
             if wrs:
                 new_overrides["LE"] = wrs[0].player_name
-            if len(wrs) >= 2:
-                new_overrides["FL"] = wrs[1].player_name
             if tes:
                 new_overrides["RE"] = tes[0].player_name
+            if len(tes) >= 2:
+                new_overrides["FL"] = tes[1].player_name
             self._on_field_offense[side] = new_overrides
             assignments = ", ".join(f"{k}={v}" for k, v in new_overrides.items())
             msg = f"PACKAGE: 2TE_1WR ({side}) — {assignments}"
