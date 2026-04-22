@@ -902,12 +902,18 @@ class TestSafety:
         game.state.down = 1
         game.state.distance = 10
 
+        # Snapshot scores before the play — the opening kickoff in __init__
+        # may have already produced scoring (e.g. a kick-return TD), so we
+        # compare deltas rather than absolute values.
+        away_before = game.state.score.away
+        home_before = game.state.score.home
+
         # Advance -5 yards (loss), pushing below goal line
         game._advance_down(-5)
 
-        # Defense (away team) should get 2 points
-        assert game.state.score.away == 2
-        assert game.state.score.home == 0
+        # Defense (away team) should gain exactly 2 points; home unchanged.
+        assert game.state.score.away == away_before + 2
+        assert game.state.score.home == home_before
 
     def test_safety_changes_possession(self):
         """After safety, possession must switch: the scoring team receives."""
@@ -925,10 +931,11 @@ class TestSafety:
         game.state.possession = "away"
         game.state.yard_line = 1
 
+        home_before = game.state.score.home
         game._advance_down(-3)
 
-        # Home team (defense) gets 2 points
-        assert game.state.score.home == 2
+        # Home team (defense) gets exactly 2 more points
+        assert game.state.score.home == home_before + 2
         assert any("SAFETY" in entry for entry in game.state.play_log)
 
     def test_no_safety_at_1(self):
@@ -939,9 +946,10 @@ class TestSafety:
         game.state.distance = 10
         game.state.down = 1
 
+        away_before = game.state.score.away
         result = game._advance_down(0)
-        # No safety, normal play
-        assert game.state.score.away == 0
+        # No safety: away score must not have increased
+        assert game.state.score.away == away_before
         assert game.state.yard_line == 1
 
 
@@ -992,3 +1000,232 @@ class TestTouchbackYardLine:
                                description="Touchback")
         yl = game._kickoff_yard_line(touchback)
         assert yl == 20
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 6 — Defensive injury swap priority
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _make_def_rated(name, position, number,
+                    pass_rush=0, tackle=0, pass_defense=0):
+    """Create a defender with explicit ability ratings."""
+    card = PlayerCard(
+        player_name=name, team="TST", position=position, number=number,
+        overall_grade="C",
+    )
+    card.pass_rush_rating = pass_rush
+    card.tackle_rating = tackle
+    card.pass_defense_rating = pass_defense
+    return card
+
+
+def _build_game_with_defense(defenders_home):
+    """Build a game where the home team uses a custom defenders list."""
+    home_roster = _build_roster()
+    home_roster.defenders = defenders_home
+    away_roster = _build_roster(
+        rbs=[_make_rb("AwayRB1", 30), _make_rb("AwayRB2", 32)],
+        qbs=[_make_qb("AwayQB", 12)],
+        wrs=[_make_wr("AwayWR1", 83), _make_wr("AwayWR2", 84)],
+        tes=[_make_te("AwayTE1", 86)],
+    )
+    home = Team(abbreviation="HOM", city="Home", name="Tester",
+                conference="AFC", division="North", roster=home_roster)
+    away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                conference="NFC", division="South", roster=away_roster)
+    return Game(home, away)
+
+
+class TestDefensiveInjurySwapPriority:
+    """Verify _immediate_injury_swap cross-position rules for defenders."""
+
+    def _defenders_43(self):
+        """Standard 4-3: 4 DL + 3 LB + 4 DB = 11 starters + 4 backups."""
+        return [
+            # starters
+            _make_def_rated("DE1",  "DE",  91, pass_rush=3),
+            _make_def_rated("DT1",  "DT",  92, tackle=3),
+            _make_def_rated("DT2",  "DT",  93, tackle=2),
+            _make_def_rated("DE2",  "DE",  94, pass_rush=2),
+            _make_def_rated("OLB1", "OLB", 55, pass_rush=2),
+            _make_def_rated("MLB1", "MLB", 56, tackle=3),
+            _make_def_rated("OLB2", "OLB", 57, pass_rush=1),
+            _make_def_rated("CB1",  "CB",  21, pass_defense=3),
+            _make_def_rated("CB2",  "CB",  22, pass_defense=2),
+            _make_def_rated("SS1",  "SS",  31, pass_defense=2),
+            _make_def_rated("FS1",  "FS",  32, pass_defense=3),
+            # backups
+            _make_def_rated("ILB_back", "ILB", 58, tackle=2, pass_rush=1),
+            _make_def_rated("OLB_back", "OLB", 59, pass_rush=3),
+            _make_def_rated("CB_back",  "CB",  23, pass_defense=1),
+            _make_def_rated("SS_back",  "SS",  33, pass_defense=1),
+        ]
+
+    def test_dt_injury_promotes_ilb(self):
+        """DT injured → ILB/MLB promoted (interior gap role)."""
+        defs = self._defenders_43()
+        game = _build_game_with_defense(defs)
+        game._immediate_injury_swap("DT1")
+        # The slot formerly occupied by DT1 should now hold an interior LB
+        promoted = game.home_team.roster.defenders[1]
+        assert promoted.position.upper() in ("ILB", "MLB"), \
+            f"Expected ILB/MLB replacement for DT, got {promoted.position}"
+
+    def test_de_injury_promotes_olb(self):
+        """DE injured → OLB promoted (edge-rusher role)."""
+        defs = self._defenders_43()
+        game = _build_game_with_defense(defs)
+        game._immediate_injury_swap("DE1")
+        promoted = game.home_team.roster.defenders[0]
+        assert promoted.position.upper() == "OLB", \
+            f"Expected OLB replacement for DE, got {promoted.position}"
+
+    def test_de_injury_prefers_olb_over_ilb(self):
+        """DE injured → OLB_back is preferred over ILB_back (edge role)."""
+        defs = self._defenders_43()
+        # Remove OLB1 and OLB2 from starters so OLB_back is the best OLB bench
+        game = _build_game_with_defense(defs)
+        # Injure DE1 — OLB_back (pass_rush=3) should win over ILB_back (tackle=2)
+        game._immediate_injury_swap("DE1")
+        promoted = game.home_team.roster.defenders[0]
+        assert promoted.player_name == "OLB_back", \
+            f"Expected OLB_back, got {promoted.player_name}"
+
+    def test_dt_injury_prefers_ilb_over_olb(self):
+        """DT injured → ILB_back is preferred over OLB (interior role)."""
+        defs = self._defenders_43()
+        game = _build_game_with_defense(defs)
+        # ILB_back (tackle=2, pass_rush=1) vs OLB_back (pass_rush=3)
+        # DT → prefers ILB/MLB first
+        game._immediate_injury_swap("DT1")
+        promoted = game.home_team.roster.defenders[1]
+        assert promoted.player_name == "ILB_back", \
+            f"Expected ILB_back, got {promoted.player_name}"
+
+    def test_cb_injury_promotes_backup_cb(self):
+        """CB injured → backup CB fills in (same group first)."""
+        defs = self._defenders_43()
+        game = _build_game_with_defense(defs)
+        game._immediate_injury_swap("CB1")
+        promoted = game.home_team.roster.defenders[7]
+        assert promoted.position.upper() in ("CB", "S", "SS", "FS", "DB"), \
+            f"Expected a DB replacement, got {promoted.position}"
+
+    def test_cb_injury_no_olb_when_enough_dbs(self):
+        """CB injured but 3+ DBs remain — OLB not called up as emergency."""
+        defs = self._defenders_43()
+        game = _build_game_with_defense(defs)
+        game._immediate_injury_swap("CB1")
+        promoted = game.home_team.roster.defenders[7]
+        # With CB_back and SS_back available, result should be a real DB, not OLB
+        assert promoted.position.upper() in ("CB", "S", "SS", "FS", "DB")
+
+    def test_db_emergency_olb_when_few_dbs(self):
+        """When only 2 healthy DBs remain, OLB may be called as emergency fill."""
+        # Build a defense where only 2 DBs are available (2 CBs, one injured)
+        defs = [
+            _make_def_rated("DE1",  "DE",  91, pass_rush=2),
+            _make_def_rated("DT1",  "DT",  92, tackle=2),
+            _make_def_rated("DT2",  "DT",  93, tackle=2),
+            _make_def_rated("DE2",  "DE",  94, pass_rush=2),
+            _make_def_rated("OLB1", "OLB", 55, pass_rush=2, pass_defense=2),
+            _make_def_rated("MLB1", "MLB", 56, tackle=2),
+            _make_def_rated("OLB2", "OLB", 57, pass_rush=1, pass_defense=1),
+            # Only 3 DBs total: CB1 (to be injured) + CB2 + SS1
+            _make_def_rated("CB1",  "CB",  21, pass_defense=3),
+            _make_def_rated("CB2",  "CB",  22, pass_defense=2),
+            _make_def_rated("SS1",  "SS",  31, pass_defense=2),
+            _make_def_rated("OLB_emerg", "OLB", 59, pass_defense=3),  # bench OLB
+        ]
+        game = _build_game_with_defense(defs)
+        # Mark CB2 and SS1 as injured (injuries dict maps name -> duration > 0)
+        game.state.injuries["CB2"] = 99
+        game.state.injuries["SS1"] = 99
+        game._immediate_injury_swap("CB1")
+        promoted = game.home_team.roster.defenders[7]
+        # OLB_emerg is the only healthy non-DL non-LB left
+        assert promoted.position.upper() == "OLB", \
+            f"Expected emergency OLB, got {promoted.position} ({promoted.player_name})"
+
+    def test_defensive_sub_logged(self):
+        """Auto defensive sub must appear in play log."""
+        defs = self._defenders_43()
+        game = _build_game_with_defense(defs)
+        game._immediate_injury_swap("DT1")
+        log = " ".join(game.state.play_log)
+        assert "DEF SUB" in log or "EMERGENCY" in log, \
+            "Defensive substitution was not logged"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Part 7 — Offensive emergency fill grade priority
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestOffensiveEmergencyFillPriority:
+    """Verify _get_all_receivers grade-sorts RBs used as emergency fills."""
+
+    def _make_rb_graded(self, name, number, blocks=0, n_pass_gain_rows=0):
+        rb = _make_rb(name, number)
+        rb.blocks = blocks
+        # Populate the requested number of pass_gain rows with a token value
+        from engine.player_card import ThreeValueRow
+        rb.pass_gain = [ThreeValueRow(v1=5, v2=8, v3=10)] * n_pass_gain_rows
+        return rb
+
+    def _build_game_no_wrs_no_tes(self, rbs):
+        """Build a game whose home offense has only RBs (no WRs, no TEs)."""
+        home_roster = Roster(
+            qbs=[_make_qb()],
+            rbs=rbs,
+            wrs=[],
+            tes=[],
+            kickers=[],
+            punters=[],
+            offensive_line=[
+                _make_ol("LT", "LT", 70), _make_ol("LG", "LG", 71),
+                _make_ol("C", "C", 72),  _make_ol("RG", "RG", 73),
+                _make_ol("RT", "RT", 74),
+            ],
+            defenders=[_make_def(f"DEF{i}", pos, 50 + i)
+                        for i, pos in enumerate(["DE", "DT", "DT", "DE",
+                                                 "LB", "LB", "LB",
+                                                 "CB", "CB", "SS", "FS"])],
+        )
+        home = Team(abbreviation="HOM", city="Home", name="Tester",
+                    conference="AFC", division="North", roster=home_roster)
+        away_roster = _build_roster(
+            rbs=[_make_rb("AwayRB1", 30)],
+            qbs=[_make_qb("AwayQB", 12)],
+            wrs=[_make_wr("AwayWR1", 83)],
+            tes=[_make_te("AwayTE1", 86)],
+        )
+        away = Team(abbreviation="AWY", city="Away", name="Visitor",
+                    conference="NFC", division="South", roster=away_roster)
+        return Game(home, away)
+
+    def test_re_emergency_fill_prefers_best_blocker(self):
+        """RE (TE slot) emergency fill: RB with highest blocks wins."""
+        blocker_rb = self._make_rb_graded("BlockerRB", 30, blocks=5, n_pass_gain_rows=0)
+        receiver_rb = self._make_rb_graded("ReceiverRB", 31, blocks=-1, n_pass_gain_rows=8)
+        rbs = [blocker_rb, receiver_rb]
+        game = self._build_game_no_wrs_no_tes(rbs)
+        game.state.possession = "home"
+        receivers = game._get_all_receivers()
+        # Find whichever RB was placed in the RE slot
+        re_player = next((r for r in receivers if r._formation_slot == "RE"), None)
+        assert re_player is not None, "RE slot was not filled"
+        assert re_player.player_name == "BlockerRB", \
+            f"Expected BlockerRB in RE, got {re_player.player_name}"
+
+    def test_le_emergency_fill_prefers_best_receiver(self):
+        """LE (WR slot) emergency fill: RB with most pass_gain rows wins."""
+        blocker_rb = self._make_rb_graded("BlockerRB", 30, blocks=5, n_pass_gain_rows=0)
+        receiver_rb = self._make_rb_graded("ReceiverRB", 31, blocks=-1, n_pass_gain_rows=8)
+        rbs = [blocker_rb, receiver_rb]
+        game = self._build_game_no_wrs_no_tes(rbs)
+        game.state.possession = "home"
+        receivers = game._get_all_receivers()
+        le_player = next((r for r in receivers if r._formation_slot == "LE"), None)
+        assert le_player is not None, "LE slot was not filled"
+        assert le_player.player_name == "ReceiverRB", \
+            f"Expected ReceiverRB in LE, got {le_player.player_name}"
