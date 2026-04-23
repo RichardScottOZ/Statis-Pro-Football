@@ -1,51 +1,18 @@
 # Statis Pro Football
 
-A digital implementation of the classic Statis Pro Football tabletop game, featuring a Python game engine with AI play calling, a React/TypeScript web GUI, and complete player cards for all 32 NFL teams across multiple seasons.
+A digital implementation of the classic Statis Pro Football tabletop game, featuring a Python game engine with AI play calling, a React/TypeScript web GUI, and complete player cards for all 32 NFL teams.
 
-**Status:** Feature-complete. Core 5E engine is fully implemented, the GUI includes complete human play calling with all 5E features, and 598+ tests are passing.
+The primary mode is **5th Edition (5E)**, which uses a 109-card FAC deck faithfully reproducing the Statis Pro Football 5th Edition mechanics. A legacy d8×d8 dice mode is also included for backward compatibility.
 
-## Overview
-
-Statis Pro Football supports two game modes:
-
-### 5th Edition Mode (Primary)
-
-The **5th-edition FAC deck system** uses a physical deck of **109 Fast Action Cards** that faithfully reproduce the Statis Pro Football 5th Edition mechanics:
-
-- **109-card deck** — 96 standard cards (numbers 1–48 appearing twice, with out-of-bounds variants) + 13 Z-cards (special events)
-- **Draw-without-replacement** — Cards are drawn one at a time until the deck is exhausted, then reshuffled
-- **48-slot QB pass columns** — Pass Numbers 1–48 produce receiver letters (A–E), INC, or INT
-- **12-slot RB run columns** — Run Numbers 1–12 with inside, outside, and sweep directions
-- **Two-stage pass resolution** — QB card determines receiver letter → receiver card determines yards
-- **FAC-driven mechanics** — End-around checks (ER field), receiver targeting / pass-rush triggers (QK/SH/LG), screen results (SC), blocking matchups (SL/IL/SR/IR), and solitaire play calling (SOLO field)
-- **Z-card system** — 13 Z-cards trigger special events (injuries, penalties, fumbles)
-- **Offensive Strategies** — Flop, Sneak, Draw, Play-Action (all implemented)
-- **Defensive Strategies** — Double Coverage, Triple Coverage (all implemented)
-- **Big Play Defense** — Full system for teams with 9+ wins
-- **Two-Minute Offense** — Complete restrictions (yardage halving, -4 completion)
-
-### Legacy Mode
-
-The original **d8×d8 dice-based system** (64 slots, range 11–88) remains fully supported for backward compatibility.
-
-### Features
+## Features
 
 - **Complete Game Engine** — Full football simulation with drives, scoring, penalties, turnovers, clock management, and overtime
-- **AI Play Calling** — Solitaire mode with both legacy dice-based and 5th-edition SOLO field-based play selection
-- **Player Card System** — 5th-edition (48/12-slot) and legacy (64-slot) cards generated from real NFL statistics
-- **Two Seasons of Data** — 2024 (2023 NFL stats) and 2025 (2024 NFL stats) with all 32 teams
-- **Web GUI** — React/TypeScript frontend with human offensive/defensive play calling, formation grid, player substitutions, depth chart, display box assignments, injury tracking, endurance display, player stats panel, FAC card display, BV vs TV battles, and real-time game state
-- **REST API** — FastAPI backend with 30+ endpoints for game management, human play calling, special teams, roster management, and card browsing
-- **Comprehensive Tests** — 598+ tests covering dice/deck distribution, card generation, game mechanics, GUI-facing API behavior, kickoff returns, fumble logging, injury/endurance, blitz/pass-rush, blocking matchups, and 5E rules
-
-## Implementation Status
-
-- **Engine**: 146/146 5E rules (100%) implemented
-- **GUI**: 88/88 audited features (100%) implemented
-- **Tests**: 598+ tests passing
-- **Documentation**: Complete audit documents and API reference
-
-See [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) for detailed status.
+- **Human Play Calling** — Call offensive plays, defensive formations, and special teams from the web GUI
+- **AI Solitaire Mode** — Let the AI control both sides using the 5E SOLO field
+- **Player Card System** — 5E (48/12-slot) cards generated from real NFL statistics, all 32 teams
+- **Two Seasons of Data** — 2024 (2023 NFL stats) and 2025 (2024 NFL stats)
+- **Web GUI** — React/TypeScript frontend with real-time game state, FAC card display, player stats, roster management, and depth chart
+- **REST API** — FastAPI backend for all game management and play calling
 
 ## Quick Start
 
@@ -58,7 +25,7 @@ See [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) for detailed status.
 
 ```bash
 # Clone the repository
-git clone https://github.com/RichardScottOZ/Statis-Pro-Football.git
+git clone https://github.com/bluetyson/Statis-Pro-Football.git
 cd Statis-Pro-Football
 
 # Install Python dependencies
@@ -69,30 +36,6 @@ cd gui
 npm install
 cd ..
 ```
-
-### Updating an Existing Local Clone
-
-Because the project is moving quickly, use this sequence whenever you pull new changes:
-
-```bash
-# From the repo root
-git pull
-
-# Refresh Python dependencies
-pip install -r scripts/requirements.txt
-
-# Refresh GUI dependencies and rebuild
-cd gui
-rm -rf node_modules
-npm install
-npx vite build
-cd ..
-
-# Re-run backend tests
-python3 -m pytest tests/ -x -q
-```
-
-If you are actively developing with the GUI open, restart both the API server and the Vite dev server after pulling updates.
 
 ### Run a Quick Game (Python)
 
@@ -156,228 +99,229 @@ python3 -m pytest tests/ -x -q --ignore=tests/test_api_server.py -k "not test_oo
 python3 -m pytest tests/ -x -q
 ```
 
+## How to Play
+
+### Game Modes
+
+When you start the web GUI (`npm run dev` + API server), you select a game mode on the setup screen:
+
+| Mode | Description |
+|------|-------------|
+| **Solitaire** | AI controls both teams. Good for watching a game play out automatically. |
+| **Human Offense** | You call all offensive plays; AI handles the defense. |
+| **Human Defense** | You call all defensive plays; AI handles the offense. |
+
+You also select home and away teams, and the season (`2025_5e` is recommended).
+
+---
+
+### Calling Offensive Plays (Human Offense Mode)
+
+The **Offensive Play Caller** panel appears on your turn. Each section controls part of your play call:
+
+#### 1. Select Play Type
+
+| Play | Description |
+|------|-------------|
+| 🏃 **Run** | Standard rushing play |
+| 📫 **Short Pass** | Medium-range pass (SH column) |
+| 🎯 **Long Pass** | Deep pass — blocked inside the opponent's 20-yard line |
+| ⚡ **Quick Pass** | Fast release, fewer receiver options (QK column) |
+| 🖥️ **Screen** | Screen pass — blocked within 5 yards of the goal line |
+| 🔄 **End-Around** | WR/TE carries the ball — limited to once per player per game |
+| 🦵 **Punt** | Kick the ball away on 4th down |
+| 🥅 **Field Goal** | Attempt a field goal |
+| 🧎 **Kneel** | QB kneels to run out the clock |
+| ⚡ **Spike** | Stop the clock — use before it expires |
+
+#### 2. Select Direction
+
+For **run plays**: Inside Left (IL), Inside Right (IR), Sweep Left (SL), Sweep Right (SR)
+
+For **pass plays**: Left, Right, Middle
+
+#### 3. Select Strategy (optional)
+
+Strategies add wrinkles to the play. Available options depend on the play type:
+
+| Strategy | Valid For | Effect |
+|----------|-----------|--------|
+| **QB Flop** | Runs | QB fakes a pass; small negative gain |
+| **QB Sneak** | Runs | QB sneaks — 0 or +1 yard |
+| **Draw Play** | Runs | RB draw; fakes out the pass rush |
+| **Play-Action Pass** | Passes | Fake run before passing; boosts completion |
+
+#### 4. Select Ball Carrier or Receiver Target
+
+- **Run / End-Around**: Choose an RB or QB from the dropdown, or leave on Auto (picks best healthy RB).
+- **Pass plays**: Choose the receiver you want to target. The best healthy receiver is auto-selected, but you can override it.
+
+#### 5. Backs in to Block (pass plays)
+
+On any pass play you can optionally keep one or more RBs in to pass-block. Each blocking back:
+- Adds **+2 to the QB's completion range**
+- **Cannot be targeted** on that play — if the FAC card redirects to a blocking back, the pass falls incomplete
+
+#### 6. Call the Play
+
+Click **▶ Call Play** to execute. The play log updates immediately with the result.
+
+#### Automation Options
+
+If you don't want to call every play manually, three buttons let the AI take over temporarily:
+
+| Button | What it does |
+|--------|-------------|
+| 🤖 **AI Play** | AI calls a single play for your team |
+| 🏃 **Sim Drive** | AI runs the current drive to completion |
+| 🏆 **Sim Game** | AI simulates the rest of the game |
+
+#### Special Teams Options
+
+Expand **🏈 Special Teams Options** for:
+
+| Option | When to Use |
+|--------|-------------|
+| **Fake Punt** | 4th down — resolves as a run from punt formation (once per game) |
+| **Fake FG** | 4th down — resolves as a pass or run from FG formation (once per game, not in final 2 min) |
+| **Coffin Corner** | Punt aimed at the sideline; use the slider to set the yardage deduction (-10 to -25 yds) |
+| **Onside Kick** | After a score — attempt to recover your own kickoff |
+| **Squib Kick** | Low bouncing kick to avoid a deep returner |
+
+---
+
+### Calling Defensive Plays (Human Defense Mode)
+
+The **Defensive Play Caller** panel appears when the opponent has the ball.
+
+#### 1. Defensive Formation (cosmetic)
+
+Choose the personnel grouping you want displayed. **Note:** formation labels are display-only in 5E — they do not modify play resolution. All play modifiers come from the Play Card and individual player ratings.
+
+| Formation | Personnel |
+|-----------|-----------|
+| **4-3 Base** | 4 DL, 3 LB, 4 DB |
+| **3-4 Base** | 3 DL, 4 LB, 4 DB |
+| **Nickel** | 4 DL, 2 LB, 5 DB — extra DB for passing situations |
+| **Goal Line** | 5+ DL, LB — heavy run stop package |
+
+#### 2. Defensive Play Card
+
+This is the main defensive decision and does affect play resolution:
+
+| Play Card | Effect |
+|-----------|--------|
+| 🎯 **Pass Defense** | Standard pass coverage (Quick -10 \| Short 0 \| Long 0) |
+| 🔒 **Prevent Defense** | Concede short gains, protect against big plays (Quick -10 \| Short -5 \| Long -7) |
+| 🏃 **Run Defense (No Key)** | Commit to stopping the run (+2 RUN# modifier) |
+| 1️⃣ **Run D / Key Back 1** | Key on the #1 back — +4 modifier if correct, 0 if wrong |
+| 2️⃣ **Run D / Key Back 2** | Key on the #2 back |
+| 3️⃣ **Run D / Key Back 3** | Key on the #3 back |
+| ⚡ **Blitz** | Send extra pass rushers (Short -5 \| Long passes trigger P.Rush) |
+
+#### 3. Defensive Strategy (optional)
+
+| Strategy | Effect |
+|----------|--------|
+| **Double Coverage (-7)** | Remove one receiver from available targets; -7 to completion range |
+| **Triple Coverage (-15)** | Remove two receivers; -15 to completion range |
+| **Alt Double Coverage** | Variation removing two receivers without the range penalty |
+
+#### 4. Blitz Player Selection
+
+If you choose the **Blitz** play card, a panel appears to select which LBs and/or DBs blitz. You must pick **2–5 players**. Selected players are removed from their coverage boxes and rush the QB.
+
+#### 5. Set Defense
+
+Click **🛡️ Set Defense** to commit your defensive call. The offensive AI then calls its play and the outcome is resolved.
+
+---
+
+### Display Boxes (A–O)
+
+The **Display Boxes** panel shows the 15 defensive position slots filled by your defenders:
+
+| Row | Boxes | Players |
+|-----|-------|---------|
+| Row 1 | A–E | DL (DE/DT) |
+| Row 2 | F–J | LBs |
+| Row 3 | K–O | DBs (CB in K/O, FS in M, SS in N) |
+
+The FAC card's SL/IL/SR/IR field triggers BV vs TV blocking matchups using these box assignments. You can reassign players to boxes from the **Starting Lineup** and **Substitutions** panels.
+
+---
+
+### Roster Management
+
+Three panels on the right sidebar let you manage your roster mid-game:
+
+- **Starting Lineup** — View and change the players assigned to each position slot
+- **Substitutions** — Swap in backup players from the depth chart
+- **Depth Chart** — View the full roster sorted by position; includes injured status
+
+Injuries are tracked automatically. When a player is injured, their backup is promoted immediately.
+
+---
+
+## The 5th Edition FAC Deck
+
+Statis Pro Football 5E uses a deck of **109 Fast Action Cards** drawn without replacement:
+
+- **96 standard cards** — numbers 1–48, each appearing twice (normal + out-of-bounds variant)
+- **13 Z-cards** — special event cards (penalties, injuries, fumbles)
+
+Each card carries fields that drive every aspect of play resolution:
+
+| Field | Used For |
+|-------|----------|
+| RUN# (1–12) | RB card lookup for rushing plays |
+| PASS# (1–48) | QB and receiver card lookup for passing plays |
+| SL / IL / SR / IR | Blocking matchup (BV vs TV) for run and pass plays |
+| QK / SH / LG | Receiver targeting override or pass-rush trigger |
+| ER | End-around resolution |
+| SC | Screen pass result |
+| Z RES | Z-card event (penalty / injury / fumble) |
+| SOLO | AI solitaire play calling |
+
+When the deck is exhausted it is automatically reshuffled.
+
+### Player Grades
+
+Players are graded **A+, A, B, C, or D** based on real NFL performance. Higher grades produce better card distributions — more completions, longer gains, fewer turnovers.
+
+---
+
 ## Project Structure
 
 ```
 Statis-Pro-Football/
-├── engine/                     # Python game engine
-│   ├── api_server.py           # FastAPI REST server (30+ endpoints)
-│   ├── card_generator.py       # Generate player cards (legacy + 5th-ed)
-│   ├── charts.py               # Penalty, return, and recovery charts
-│   ├── fac_deck.py             # 109-card FAC deck (5th Edition)
-│   ├── fac_distributions.py    # Card distribution tables (48/12/64-slot)
-│   ├── fast_action_dice.py     # 11-88 dice system (legacy)
-│   ├── game.py                 # Core game state and logic
-│   ├── play_resolver.py        # Play outcome resolution (legacy + 5th-ed)
-│   ├── play_types.py           # 5E defensive/offensive play type enums
-│   ├── player_card.py          # Player card data model
-│   ├── solitaire.py            # AI play calling (legacy + SOLO-based)
-│   ├── stats_fetcher.py        # Stats lookup with fallback data
-│   ├── team.py                 # Team and roster management
+├── engine/              # Python game engine
+│   ├── api_server.py    # FastAPI REST server
+│   ├── game.py          # Core game state and logic
+│   ├── play_resolver.py # Play outcome resolution
+│   ├── fac_deck.py      # 109-card FAC deck
+│   ├── solitaire.py     # AI play calling
+│   ├── team.py          # Team and roster management
 │   └── data/
-│       ├── 2024/               # 2024 season team JSON files (32 teams, legacy)
-│       ├── 2025/               # 2025 season team JSON files (legacy, 32 teams)
-│       ├── 2025_5e/            # 2025 season team JSON files (5th-ed, 32 teams) ← primary
-│       ├── generate_2024_data.py
-│       ├── generate_2025_data.py
-│       └── generate_2025_5e_data.py
-├── gui/                        # React/TypeScript web frontend
-│   ├── src/
-│   │   ├── components/         # UI components (20+ components)
-│   │   │   ├── BlitzPlayerSelector.tsx   # Blitz player selection
-│   │   │   ├── DefensivePlayCaller.tsx   # Human defensive play calling
-│   │   │   ├── DepthChart.tsx            # Depth chart management
-│   │   │   ├── DisplayBoxes.tsx          # 5E defensive display (A-O boxes)
-│   │   │   ├── FACCardDisplay.tsx        # FAC card visual
-│   │   │   ├── GameBoard.tsx             # Main game board
-│   │   │   ├── HumanPlayCaller.tsx       # Human offensive play calling
-│   │   │   ├── LetterBoards.tsx          # Formation grid
-│   │   │   ├── StartingLineup.tsx        # Lineup management
-│   │   │   ├── SubstitutionPanel.tsx     # Player substitutions
-│   │   │   └── ...
-│   │   ├── hooks/              # React hooks (API integration)
-│   │   ├── types/              # TypeScript type definitions
-│   │   └── styles/             # CSS styling
-│   └── ...
+│       ├── 2025_5e/     # 2025 season (5th-ed, 32 teams) ← primary
+│       ├── 2025/        # 2025 season (legacy, 32 teams)
+│       └── 2024/        # 2024 season (legacy, 32 teams)
+├── gui/                 # React/TypeScript web frontend
+│   └── src/
+│       └── components/  # HumanPlayCaller, DefensivePlayCaller, DisplayBoxes, …
 ├── scripts/
-│   ├── generate_cards.py       # CLI for card generation
-│   └── requirements.txt        # Python dependencies
-├── tests/                      # Test suite (598+ tests)
-│   ├── test_5e_kickoff_return.py
-│   ├── test_5e_rules.py
-│   ├── test_5e_system.py
-│   ├── test_api_server.py
-│   ├── test_blitz_pass_rush_and_receivers.py
-│   ├── test_blocking_matchup_resolution.py
-│   ├── test_card_generator.py
-│   ├── test_engine.py
-│   ├── test_fac_system.py
-│   ├── test_fg_kickoff_and_run_middle.py
-│   ├── test_fumble_return_logging.py
-│   ├── test_human_defense_override.py
-│   ├── test_injury_grid_and_endurance.py
-│   └── test_kickoff_td_and_play_sync.py
-└── docs/                       # Documentation
-    ├── getting-started.md      # Setup and installation guide
-    ├── game-mechanics.md       # How the game works
-    ├── player-cards.md         # Player card explanation and examples
-    ├── creating-custom-players.md  # Custom player creation guide
-    ├── api-reference.md        # REST API documentation
-    ├── 5e-rules-audit.md       # Complete 5E rules implementation tracking
-    └── gui-audit.md            # GUI feature implementation tracking
+│   └── requirements.txt # Python dependencies
+├── tests/               # Test suite (600+ tests)
+└── docs/                # Detailed documentation
 ```
-
-## How It Works
-
-### 5th Edition: The FAC Deck
-
-The 5th-edition system uses a deck of **109 Fast Action Cards**:
-
-| Card Type | Count | Description |
-|-----------|-------|-------------|
-| Standard | 96 | Numbers 1–48 (each twice: normal + out-of-bounds variant) |
-| Z Cards | 13 | Special event cards (injuries, penalties, fumbles) |
-
-Each FAC card contains 13 fields that drive all game mechanics:
-
-| Field | Used For |
-|-------|----------|
-| RUN# (1–12) | RB card lookup |
-| PASS# (1–48) | QB/receiver card lookup |
-| SL/IL/SR/IR | Defensive blocking matchups |
-| ER | End-around resolution |
-| QK/SH/LG | Receiver targeting override / P.Rush trigger |
-| SC | Screen pass result |
-| Z RES | Special events (penalty, injury, fumble) |
-| SOLO | Solitaire play calling |
-
-**Pass Play Resolution (5th Edition):**
-1. Draw FAC card
-2. Check QK/SH/LG target field → may override receiver or trigger **P.Rush**
-3. ER is used for end-around resolution, not normal pass sacks
-4. Look up PASS# on QB card → receiver letter (A–E) / INC / INT
-5. If receiver letter → look up same PASS# on receiver card → yards
-
-**Run Play Resolution (5th Edition):**
-1. Draw FAC card
-2. Look up RUN# on RB card (inside/outside/sweep) → yards
-3. If "(OB)" suffix → out of bounds (clock stops)
-4. Check Z RES for fumbles/injuries
-
-### Legacy: The Fast Action Dice
-
-Two 8-sided dice (values 1–8) produce a two-digit number from 11 to 88, giving 64 possible outcomes. Each roll determines:
-
-1. **Play Tendency** — RUN, SHORT_PASS, LONG_PASS, or BLITZ
-2. **Penalty Check** — 5 specific combinations (~8% chance) trigger a penalty roll
-3. **Turnover Modifier** — A separate d8 roll for turnover-related effects
-
-### Player Cards
-
-**5th Edition cards:**
-
-| Position | Rows | Columns | Cell Contents |
-|----------|------|---------|---------------|
-| QB | 48 (Pass#) | Short, Long, Quick Pass | Receiver letter (A–E), INC, INT |
-| RB | 12 (Run#) | Inside, Outside, Sweep | Yards, FUMBLE, BREAKAWAY |
-| WR/TE | 48 (Pass#) | Short/Long Reception | Yards, INC |
-| K | — | FG Chart (by distance), XP Rate | Success probability |
-| P | — | Avg Distance, Inside-20 Rate | Distance/placement |
-| DEF | — | Pass Rush, Coverage, Run Stop + letter | Ratings (0–99) |
-
-### Grades
-
-Players are graded A+, A, B, C, or D based on their real NFL performance. Higher grades produce better distributions on their cards — more completions, longer gains, fewer turnovers.
 
 ## Documentation
 
-For detailed documentation, see the [docs/](docs/) directory:
-
-- **[Getting Started](docs/getting-started.md)** — Installation, setup, running the game
-- **[Game Mechanics](docs/game-mechanics.md)** — Detailed explanation of how the 5E game works
-- **[Player Cards](docs/player-cards.md)** — Understanding 5E player cards with examples
+- **[Getting Started](docs/getting-started.md)** — Detailed installation, all run options, troubleshooting
+- **[Game Mechanics](docs/game-mechanics.md)** — Full explanation of 5E rules, FAC deck, clock, scoring
+- **[Player Cards](docs/player-cards.md)** — Understanding player card formats with examples
 - **[Creating Custom Players](docs/creating-custom-players.md)** — How to create your own player cards
 - **[API Reference](docs/api-reference.md)** — REST API endpoint documentation
-- **[5E Rules Audit](docs/5e-rules-audit.md)** — Complete mapping of all 146 5E rules to implementation
-- **[GUI Audit](docs/gui-audit.md)** — Tracking of 88 GUI features across 11 categories
-
-## Advanced Rules (Optional / House Rules)
-
-The following rules are implemented as optional extensions beyond the core 5th-edition rulebook:
-
-- **Shotgun Formation (Offense)** — When the QB declares Shotgun, he receives +1 to all
-  completion ranges and +1 to the offensive pass-block sum for all pass-rush checks on that
-  play.  Play-Action passes are **not allowed** from Shotgun (the defense cannot be fooled
-  by a run fake from an obvious passing formation).
-
-- **Goal Line Defensive Package** — Activating the GOAL_LINE package selects the 5 players
-  (from DL + LB combined) with the highest combined tackle + pass-rush ratings and places
-  them on the defensive line.  Three additional LBs fill the second wave.  The remaining 3
-  spots are filled by DBs, explicitly **excluding** any Free Safety (FS-position) players —
-  they are removed from the field for this package.  The total on-field unit is 5 + 3 + 3 = 11.
-
-- **Extra Pass Blocking (Backs in to Block)** — Before the snap on any pass play, the offense
-  may declare any or all of its backs as blockers.  Each blocking back adds +2 to the QB's
-  Completion Range but **cannot be targeted**; if the FAC redirects the pass to a blocking
-  back, the pass is **incomplete**.  The AI applies this decision situationally (base ~30 %
-  chance per pass play; rises to ~50 % on 3rd/4th & long or when protecting a late lead).
-  All blocking-back decisions are logged in the play log.
-
-- **Sack Credit Assignment** — When a sack results from a Pass Rush, individual credit is
-  assigned to the defender most responsible using a weighted random draw:
-  - **Pass-rush line** (Row 1, boxes A-E): each occupied DL box is a candidate weighted by
-    the player's `pass_rush_rating`.  Players with high pass-rush ratings (> 2) are
-    therefore the strongest contributors and are typically placed on the line.
-  - **Blitzers** (Row 2/3 boxes): any blitzing player is also a candidate with fixed weight 2
-    (their 5E blitz PR value).
-  - `random.choices` draws one box from the weighted pool.  If two players occupy that
-    box, each receives a **half sack** (0.5); otherwise the sole occupant gets a **full sack**.
-  - **Fallback**: if no weighted candidates are found, credit goes to the highest-rated pass
-    rusher in the whole defense.  Ties are split equally (half sack each, even if > 2 players).
-  - The sacker's name appears in the play log (e.g. "Josh Allen sacked by Myles Garrett! 6 yard loss.")
-    and in the end-of-game SACKS section of the boxscore.
-
-- **Tackle Credit Assignment** — Individual tackle credit is assigned on every run play and
-  completed pass.  The algorithm (house rule):
-  - **Direct box assignment**: when the blocking matchup on the FAC card identified a
-    specific defended box, that box's player(s) get the tackle.  Two players in a box →
-    half tackle each (0.5); two boxes each with one player → half tackle each.
-  - **Weighted random fallback**: when boxes are empty or the matchup is not box-based, a
-    weighted draw over all occupied defensive boxes is used.  Weights vary by play type:
-    - *Inside run*: DTs (B/C/D) and ILB/MLB (G/H/I) most likely.
-    - *Sweep*: DEs (A/E) and OLBs (F/J) most likely.
-    - *Long pass*: CBs (K/O) and FS (M) overwhelmingly likely; covering defender doubled.
-    - *Short pass*: mostly DBs and LBs; covering defender doubled.
-    - *Quick pass*: more even across all rows; covering defender doubled.
-    - *Screen*: outside players (OLBs F/J and DEs A/E) most likely.
-  - Tackle totals (whole and fractional) appear in the end-of-game TACKLES section of the
-    boxscore and are logged in the play log.
-
-- **Fumble Recovery Assignment** — When a fumble is recovered by the defense, a specific
-  player is selected as the recoverer:
-  - The identified tackler for that play is the most likely recoverer (their weight doubled).
-  - All other defenders are secondary candidates weighted by play type (same distribution
-    as tackle assignment — the nearest defenders are most likely to pick up the ball).
-  - The recoverer's name appears in the play description ("... [Name] recovers for the defense!")
-    and in the end-of-game FUMBLE RECOVERIES section of the boxscore.
-
-## Future Rules / Potential Extensions
-
-The following rules do not appear in the 5th-edition rulebook but may be added as optional house rules in a future release:
-
-- ~~**Shotgun Formation (Offense)**~~ — Now implemented as an advanced rule (see above).
-
-- ~~**Sack Credit Assignment**~~ — Now implemented as an advanced rule (see above).
-
-- ~~**Tackle Credit Assignment**~~ — Now implemented as an advanced rule (see above).
-
-- ~~**Fumble Recovery Assignment**~~ — Now implemented as an advanced rule (see above).
-
-- **Special Teams Individual Credit** — Fumble recoveries, tackles, and blocks on kickoff/
-  punt returns could be assigned to individual special-teams personnel (backup roster players).
-  Currently special-teams fumble recoveries are team-level only; a future extension could
-  draw from the depth chart to assign individual credit consistent with how game-play
-  fumble recoveries are handled.
 
 ## License
 
