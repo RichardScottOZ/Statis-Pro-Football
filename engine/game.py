@@ -284,6 +284,27 @@ class Game:
                 box_to_defender[box] = card
         return box_to_defender
 
+    def _build_defenders_list_by_box(self, defense: Team) -> Dict[str, List[PlayerCard]]:
+        """Build a mapping of box letter → list of PlayerCards (supports double-staffed boxes).
+
+        Uses assign_defenders_to_boxes_multi so that extra DL beyond the five
+        Row-1 slots overflow into interior boxes B, D, C — enabling the
+        short-yardage crowding-bonus rule in resolve_sneak.
+        """
+        if not defense or not defense.roster:
+            return {}
+        defenders = list(defense.roster.defenders)[:11]
+        if not defenders:
+            return {}
+        multi_map = PlayResolver.assign_defenders_to_boxes_multi(defenders)
+        name_to_card = {d.player_name: d for d in defenders}
+        result: Dict[str, List[PlayerCard]] = {}
+        for box, names in multi_map.items():
+            cards = [name_to_card[n] for n in names if n in name_to_card]
+            if cards:
+                result[box] = cards
+        return result
+
     def _is_player_unavailable(self, player: Optional[PlayerCard]) -> bool:
         return bool(player and self.state.injuries.get(player.player_name, 0) > 0)
 
@@ -1874,6 +1895,8 @@ class Game:
             time = self.TIME_CLOCK_STOP
         elif result.play_type == "KNEEL":
             time = self.TIME_KNEEL
+        elif result.play_type == "SPIKE" or result.strategy == "SPIKE":
+            time = self.TIME_CLOCK_STOP
         else:
             time = self.TIME_STANDARD_PLAY
         # Track for timeout restriction rule
@@ -2346,11 +2369,11 @@ class Game:
             if qb:
                 defense = self.get_defense_team()
                 ol_by_pos = self._build_ol_by_position()
-                def_by_box = self._build_defenders_by_box(defense)
+                def_list_by_box = self._build_defenders_list_by_box(defense)
                 result = self.resolver.resolve_sneak(
                     qb, self.deck,
                     ol_by_position=ol_by_pos,
-                    defenders_by_box=def_by_box,
+                    defenders_list_by_box=def_list_by_box,
                 )
                 self._apply_current_personnel_note(result)
                 self.state.play_log.append(f"  → {result.description}")
@@ -2466,6 +2489,10 @@ class Game:
         elif play_call.play_type == "KNEEL":
             result = PlayResult("KNEEL", -1, "KNEEL", description="QB kneels")
             self._advance_down(-1)
+        elif play_call.play_type == "SPIKE":
+            qb = self.get_qb(player_name) or self.get_qb()
+            spike_qb = qb if qb else PlayerCard("QB", "", "QB", 0)
+            result = self.resolver.resolve_spike(spike_qb)
         elif play_call.play_type == "RUN":
             result = self._execute_run_5e(fac_card, play_call, defense_formation, player_name,
                                           defensive_play_5e=def_play_5e)
@@ -2642,6 +2669,25 @@ class Game:
 
         if play_call.play_type == "KNEEL":
             self._advance_time(self.TIME_KNEEL)
+            return result
+
+        if play_call.play_type == "SPIKE":
+            # Retroactively halve the previous play's time (minimum 10 s).
+            prev_time = self._last_play_time
+            reduced = max(self.TIME_CLOCK_STOP, prev_time // 2)
+            refund = max(0, prev_time - reduced)
+            if refund > 0:
+                self.state.time_remaining += refund
+                self.state.play_log.append(
+                    f"  ⚡ QB Spike: previous play time halved "
+                    f"({prev_time}s → {reduced}s, +{refund}s restored to clock)"
+                )
+            # Spike is an incomplete pass — advances the down, no yardage change.
+            self._advance_down(0)
+            if self.state.down > 4:
+                self._turnover_on_downs()
+            self._last_play_time = self.TIME_CLOCK_STOP
+            self._advance_time(self.TIME_CLOCK_STOP)
             return result
 
         self._advance_down(result.yards_gained)

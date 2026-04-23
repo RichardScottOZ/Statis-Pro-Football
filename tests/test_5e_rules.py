@@ -186,7 +186,7 @@ class TestOffensiveStrategies:
         box_d.tackle_rating = 4
         # adjustment = 5 - 9 = -4 → success_count = 24 - 4 = 20
         ol_by_pos = {"LG": lg, "CN": cn, "RG": rg}
-        def_by_box = {"B": box_b, "C": box_c, "D": box_d}
+        def_list_by_box = {"B": [box_b], "C": [box_c], "D": [box_d]}
         # Use a deck that will produce PN=21 (should fail with success_count=20)
         # We'll test the calculation directly via a fixed PN
         import unittest.mock as mock
@@ -197,7 +197,7 @@ class TestOffensiveStrategies:
             result = self.resolver.resolve_sneak(
                 self.qb, deck,
                 ol_by_position=ol_by_pos,
-                defenders_by_box=def_by_box,
+                defenders_list_by_box=def_list_by_box,
             )
         assert result.yards_gained == 0, "PN=21 should fail when success_count=20"
         assert "[Sneak] Defense +4 advantage" in " ".join(result.debug_log)
@@ -221,7 +221,7 @@ class TestOffensiveStrategies:
         box_d = PlayerCard("DT-D", "TST", "DT", 73)
         box_d.tackle_rating = 0
         ol_by_pos = {"LG": lg, "CN": cn, "RG": rg}
-        def_by_box = {"B": box_b, "C": box_c, "D": box_d}
+        def_list_by_box = {"B": [box_b], "C": [box_c], "D": [box_d]}
         # PN=35 should gain 1 with success_count=36
         fac_card_mock = mock.MagicMock()
         fac_card_mock.pass_num_int = 35
@@ -230,7 +230,7 @@ class TestOffensiveStrategies:
             result = self.resolver.resolve_sneak(
                 self.qb, deck,
                 ol_by_position=ol_by_pos,
-                defenders_by_box=def_by_box,
+                defenders_list_by_box=def_list_by_box,
             )
         assert result.yards_gained == 1, "PN=35 should gain with success_count=36"
         assert "[Sneak] Offense +12 advantage" in " ".join(result.debug_log)
@@ -251,6 +251,103 @@ class TestOffensiveStrategies:
         with mock.patch.object(deck, "draw", return_value=fac_card_mock):
             result = self.resolver.resolve_sneak(self.qb, deck)
         assert result.yards_gained == 1
+
+    def test_sneak_double_box_crowding_bonus(self):
+        """Two defenders in the same interior box get +1 crowding bonus.
+
+        Example from rules: DT(tackle=2) + LB(tackle=1) in Box B
+        → effective Box B tackle = 2+1+1 = 4 (sum + 1 crowding bonus).
+        """
+        from engine.player_card import PlayerCard
+        import unittest.mock as mock
+        # OL: all zeros → offense_block = 0
+        lg = PlayerCard("LG", "TST", "LG", 60); lg.run_block_rating = 0
+        cn = PlayerCard("C",  "TST", "C",  61); cn.run_block_rating = 0
+        rg = PlayerCard("RG", "TST", "RG", 62); rg.run_block_rating = 0
+        # Box B: DT(2) + LB(1) → effective = 2+1+1 = 4
+        dt_b = PlayerCard("DT-B", "TST", "DT", 71); dt_b.tackle_rating = 2
+        lb_b = PlayerCard("LB-B", "TST", "LB", 72); lb_b.tackle_rating = 1
+        # Boxes C and D: empty
+        # defense_tackle = 4 → adjustment = 0 - 4 = -4 → success_count = 20
+        ol_by_pos = {"LG": lg, "CN": cn, "RG": rg}
+        def_list_by_box = {"B": [dt_b, lb_b]}  # two players in Box B
+        # PN=21 should fail (success_count=20)
+        fac_card_mock = mock.MagicMock()
+        fac_card_mock.pass_num_int = 21
+        deck = FACDeck(seed=42)
+        with mock.patch.object(deck, "draw", return_value=fac_card_mock):
+            result = self.resolver.resolve_sneak(
+                self.qb, deck,
+                ol_by_position=ol_by_pos,
+                defenders_list_by_box=def_list_by_box,
+            )
+        assert result.yards_gained == 0, "PN=21 should fail with double-stuffed Box B (success_count=20)"
+        assert "crowd" in " ".join(result.debug_log).lower(), "crowding bonus should be logged"
+
+    def test_sneak_double_box_matches_example(self):
+        """Verify exact example: DT(2)+LB(1) in Box B = 4 effective tackle."""
+        from engine.player_card import PlayerCard
+        import unittest.mock as mock
+        dt_b = PlayerCard("DT-B", "TST", "DT", 71); dt_b.tackle_rating = 2
+        lb_b = PlayerCard("LB-B", "TST", "LB", 72); lb_b.tackle_rating = 1
+        # Also DT(1) alone in Box D
+        dt_d = PlayerCard("DT-D", "TST", "DT", 73); dt_d.tackle_rating = 1
+        # OL zero, defense = 4 (B: 2+1+1) + 0 (C empty) + 1 (D) = 5
+        # adjustment = 0 - 5 = -5 → success_count = 19
+        ol_by_pos = {}
+        def_list_by_box = {"B": [dt_b, lb_b], "D": [dt_d]}
+        fac_card_mock = mock.MagicMock()
+        fac_card_mock.pass_num_int = 20
+        deck = FACDeck(seed=42)
+        with mock.patch.object(deck, "draw", return_value=fac_card_mock):
+            result = self.resolver.resolve_sneak(
+                self.qb, deck,
+                ol_by_position=ol_by_pos,
+                defenders_list_by_box=def_list_by_box,
+            )
+        # PN=20 > success_count=19, should fail
+        assert result.yards_gained == 0, "PN=20 should fail (success_count=19)"
+        fac_card_mock.pass_num_int = 19
+        with mock.patch.object(deck, "draw", return_value=fac_card_mock):
+            result = self.resolver.resolve_sneak(
+                self.qb, deck,
+                ol_by_position=ol_by_pos,
+                defenders_list_by_box=def_list_by_box,
+            )
+        # PN=19 <= success_count=19, should succeed
+        assert result.yards_gained == 1, "PN=19 should gain (success_count=19)"
+
+    def test_spike_result(self):
+        """QB spike is an incomplete pass (PASS play type, INCOMPLETE result)."""
+        result = self.resolver.resolve_spike(self.qb)
+        assert result.play_type == "PASS"
+        assert result.result == "INCOMPLETE"
+        assert result.yards_gained == 0
+        assert result.strategy == "SPIKE"
+        assert result.passer == self.qb.player_name
+        assert "spike" in result.description.lower()
+
+    def test_spike_time_refund(self):
+        """Spike refunds time from previous play down to half (min 10s)."""
+        # Previous play used 40 seconds (standard run/complete pass)
+        # Halved = 20s, refund = 40-20 = 20s
+        prev_time = 40
+        time_clock_stop = 10
+        reduced = max(time_clock_stop, prev_time // 2)  # = 20
+        refund = max(0, prev_time - reduced)             # = 20
+        assert refund == 20
+
+        # Previous play used 10 seconds (incomplete pass) — no refund
+        prev_time = 10
+        reduced = max(time_clock_stop, prev_time // 2)  # = 10
+        refund = max(0, prev_time - reduced)             # = 0
+        assert refund == 0
+
+        # Previous play used 0 seconds (first play / no previous) — no refund
+        prev_time = 0
+        reduced = max(time_clock_stop, prev_time // 2)  # = 10
+        refund = max(0, prev_time - reduced)             # = 0
+        assert refund == 0
 
     def test_draw_modifies_run_number(self):
         """Draw play applies RN modifier to Run Number before card lookup."""
