@@ -76,6 +76,7 @@ class PlayResult:
     sack_by: Optional[List[Tuple[str, float]]] = None  # [(player_name, credit)] — 1.0 full, 0.5 half
     tackle_by: Optional[List[Tuple[str, float]]] = None  # [(player_name, credit)] — 1.0 full, 0.5 half
     fumble_recovered_by: Optional[str] = None  # Name of defender who recovered fumble (if defense)
+    pass_defensed_by: Optional[str] = None      # Defender credited with a pass defensed
     debug_log: List[str] = field(default_factory=list)  # Step-by-step resolution log
 
 
@@ -2512,12 +2513,29 @@ class PlayResolver:
                     )
                     r.debug_log = log
                     return r
+            # Check if the covering defender's PDR caused this incompletion.
+            # If the pass would have been complete without the PDR modifier,
+            # credit the defender with a pass defensed.
+            pass_defensed_by_name = None
+            if covering_defender and pass_defense_mod < 0:
+                pdr_val = -pass_defense_mod  # PDR contribution to PN increase
+                pn_without_pdr = max(1, min(48, pn + pass_defense_mod))
+                if qb.passing_short or qb.passing_long or qb.passing_quick:
+                    if qb.resolve_passing(pass_type, pn_without_pdr) == "COM":
+                        pass_defensed_by_name = covering_defender.player_name
+                        log.append(f"[PD] Pass defensed by {covering_defender.player_name}: "
+                                   f"PN {pn_without_pdr} (no PDR) → COM, PDR={pdr_val} raised PN to {pn}")
+
+            inc_desc = f"{qb.player_name} pass incomplete to {actual_receiver.player_name}"
+            if pass_defensed_by_name:
+                inc_desc += f" — pass defensed by {pass_defensed_by_name}"
             r = PlayResult(
                 play_type="PASS", yards_gained=0, result="INCOMPLETE",
-                description=f"{qb.player_name} pass incomplete to {actual_receiver.player_name}",
+                description=inc_desc,
                 passer=qb.player_name, receiver=actual_receiver.player_name,
                 z_card_event=z_event,
                 pass_number_used=pn,
+                pass_defensed_by=pass_defensed_by_name,
             )
             r.debug_log = log
             return r

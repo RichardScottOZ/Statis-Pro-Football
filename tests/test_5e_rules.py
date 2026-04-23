@@ -2648,3 +2648,124 @@ class TestDoubleCoverageINTSuppression:
         )
         assert result.result == "INCOMPLETE", \
             f"INT should be suppressed when covering defender away, got {result.result}"
+
+
+# ─── Pass Defensed Stat Tests ────────────────────────────────────────────
+
+
+class TestPassDefensedStat:
+    """Test that a covering defender is credited with a pass defensed when
+    their pass_defense_rating causes a pass to be incomplete."""
+
+    def _make_fac_card(self, pn=29, rn=6):
+        from engine.fac_deck import FACCard
+        return FACCard(
+            card_number=1, run_number=str(rn), pass_number=str(pn),
+            sweep_left="A", inside_left="B", sweep_right="C", inside_right="D",
+            quick_kick="Orig", short_pass="Orig", long_pass="Orig",
+            screen="Com", end_run="OK", z_result="NONE", solo="P",
+        )
+
+    def _make_qb(self, com_max=32):
+        from engine.player_card import PlayerCard, PassRanges
+        qb = PlayerCard("Test QB", "KC", "QB", 15, "A")
+        qb.passing_short = PassRanges(com_max=com_max, inc_max=47)
+        qb.passing_quick = PassRanges(com_max=com_max, inc_max=47)
+        qb.passing_long = PassRanges(com_max=com_max - 5, inc_max=47)
+        return qb
+
+    def _make_receivers(self, n=5):
+        from engine.player_card import PlayerCard, ThreeValueRow
+        slot_names = ["FL", "LE", "RE", "BK1", "BK2", "BK3"]
+        recs = []
+        for i in range(n):
+            r = PlayerCard(f"WR{i}", "KC", "WR", 80 + i, "B")
+            r.pass_gain = [ThreeValueRow(v1=5, v2=8, v3=15) for _ in range(12)]
+            r._formation_slot = slot_names[i] if i < len(slot_names) else f"BK{i}"
+            recs.append(r)
+        return recs
+
+    def test_pdr_caused_incomplete_credits_pass_defensed(self):
+        """PDR=4, com_max=32, PN=29: without PDR it would be COM → pass defensed credited.
+
+        Example from the rules: pass defense of 4, completion range of 32, PN=29.
+        Without PDR: PN 29 ≤ 32 → complete.
+        With PDR=4: PN adjusted to 33 > 32 → incomplete → pass defensed by defender.
+        """
+        from engine.player_card import PlayerCard
+        resolver = PlayResolver()
+        qb = self._make_qb(com_max=32)
+        recs = self._make_receivers(5)
+        # FL (recs[0]) is covered by box O
+        cb = PlayerCard("Elite CB", "DAL", "CB", 24, "A", pass_defense_rating=4)
+        defenders_by_box = {"O": cb}
+        fac = self._make_fac_card(pn=29)  # PN=29 ≤ 32 would complete without PDR
+        deck = FACDeck()
+        random.seed(42)
+        result = resolver.resolve_pass_5e(
+            fac, deck, qb, recs[0], recs,
+            pass_type="SHORT",
+            defenders_by_box=defenders_by_box,
+        )
+        assert result.result == "INCOMPLETE"
+        assert result.pass_defensed_by == "Elite CB", (
+            f"Expected pass_defensed_by='Elite CB', got {result.pass_defensed_by!r}"
+        )
+        assert "pass defensed by Elite CB" in result.description
+
+    def test_pdr_not_causal_no_pass_defensed(self):
+        """When pass is incomplete even without PDR, no pass defensed credited.
+
+        com_max=25, PDR=4, PN=35: without PDR PN=35 > 25 → still INC.
+        PDR is not the deciding factor → no pass defensed credit.
+        """
+        from engine.player_card import PlayerCard
+        resolver = PlayResolver()
+        qb = self._make_qb(com_max=25)
+        recs = self._make_receivers(5)
+        cb = PlayerCard("CB", "DAL", "CB", 24, "A", pass_defense_rating=4)
+        defenders_by_box = {"O": cb}
+        fac = self._make_fac_card(pn=35)  # PN=35 > 25 even without PDR → no PD
+        deck = FACDeck()
+        random.seed(42)
+        result = resolver.resolve_pass_5e(
+            fac, deck, qb, recs[0], recs,
+            pass_type="SHORT",
+            defenders_by_box=defenders_by_box,
+        )
+        assert result.result in ("INCOMPLETE", "INT")
+        assert result.pass_defensed_by is None
+
+    def test_no_covering_defender_no_pass_defensed(self):
+        """No defender in coverage box → no pass defensed."""
+        resolver = PlayResolver()
+        qb = self._make_qb(com_max=30)
+        recs = self._make_receivers(5)
+        fac = self._make_fac_card(pn=35)  # INC
+        deck = FACDeck()
+        random.seed(42)
+        result = resolver.resolve_pass_5e(
+            fac, deck, qb, recs[0], recs,
+            pass_type="SHORT",
+        )
+        assert result.result in ("INCOMPLETE", "INT")
+        assert result.pass_defensed_by is None
+
+    def test_pass_defensed_tracked_in_player_stats(self):
+        """game._track_play_stats correctly increments passes_defensed."""
+        from engine.game import Game
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("DAL", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        # Inject a fake PlayResult with pass_defensed_by set
+        fake_result = PlayResult(
+            play_type="PASS", yards_gained=0, result="INCOMPLETE",
+            description="QB pass incomplete — pass defensed by Elite CB",
+            passer="Patrick Mahomes", receiver="Travis Kelce",
+            pass_defensed_by="Elite CB",
+        )
+        game.state.possession = "away"
+        game._track_play_stats(fake_result)
+        stats = game.state.player_stats
+        assert "Elite CB" in stats
+        assert stats["Elite CB"].get("passes_defensed", 0) == 1

@@ -1323,6 +1323,14 @@ class Game:
                 stats[defender_name].setdefault("tackles", 0.0)
                 stats[defender_name]["tackles"] += credit
 
+        # Track pass defensed credit for covering defender
+        if result.pass_defensed_by:
+            name = result.pass_defensed_by
+            if name not in stats:
+                stats[name] = {}
+            stats[name].setdefault("passes_defensed", 0)
+            stats[name]["passes_defensed"] += 1
+
         # Track defensive fumble recovery
         if result.fumble_recovered_by:
             name = result.fumble_recovered_by
@@ -3221,6 +3229,19 @@ class Game:
             for name, s in sorted(fumble_rec, key=lambda x: -x[1].get("fumble_recoveries", 0)):
                 fr = s.get("fumble_recoveries", 0)
                 lines.append(f"  {name:<30s} {fr:>4d}")
+
+        # Passes defensed (defensive)
+        pd_players = [
+            (name, s) for name, s in stats.items()
+            if s.get("passes_defensed", 0) > 0
+        ]
+        if pd_players:
+            lines.append("")
+            lines.append("PASSES DEFENSED                 No")
+            lines.append("-" * 50)
+            for name, s in sorted(pd_players, key=lambda x: -x[1].get("passes_defensed", 0)):
+                pd = s.get("passes_defensed", 0)
+                lines.append(f"  {name:<30s} {pd:>4d}")
 
         # Fumbles lost — tracked at team level
         if any(v > 0 for v in self.state.turnovers.values()):
