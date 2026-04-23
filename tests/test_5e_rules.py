@@ -1938,6 +1938,121 @@ class TestTwoMinuteOffense:
         assert game._two_minute_declared is True
         assert game._is_two_minute_offense() is True
 
+    def test_rescind_two_minute_offense(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        game.declare_two_minute_offense()
+        assert game._two_minute_declared is True
+        game.rescind_two_minute_offense()
+        assert game._two_minute_declared is False
+
+    def test_two_minute_halves_run_time(self):
+        """Two-minute offense halves time for all play types (incl. non-stopping)."""
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        game.declare_two_minute_offense()
+        run_result = PlayResult("RUN", 5, "GAIN")
+        t = game._calculate_time(run_result)
+        assert t == 20, f"Two-minute run should use 20s (40/2), got {t}"
+
+    def test_two_minute_halves_incomplete_time(self):
+        """Two-minute offense also halves incomplete pass time (10→5)."""
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        game.declare_two_minute_offense()
+        inc_result = PlayResult("PASS", 0, "INCOMPLETE")
+        t = game._calculate_time(inc_result)
+        assert t == 5, f"Two-minute incomplete should use 5s (10/2), got {t}"
+
+    def test_two_minute_rescinded_on_possession_change(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        game = Game(home, away, use_5e=True, seed=42)
+        game.declare_two_minute_offense()
+        assert game._two_minute_declared is True
+        game._change_possession(25)
+        assert game._two_minute_declared is False
+
+
+class TestNoHuddleOffense:
+    """Test no-huddle offense rules."""
+
+    def _make_game(self):
+        home = Team.load("KC", "2025_5e")
+        away = Team.load("SF", "2025_5e")
+        return Game(home, away, use_5e=True, seed=42)
+
+    def test_declare_no_huddle(self):
+        game = self._make_game()
+        assert game._no_huddle is False
+        game.declare_no_huddle_offense()
+        assert game._no_huddle is True
+
+    def test_rescind_no_huddle_voluntarily(self):
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        game.rescind_no_huddle_offense()
+        assert game._no_huddle is False
+
+    def test_no_huddle_halves_run_time(self):
+        """No-huddle halves time for non-clock-stopping plays (40→20)."""
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        run_result = PlayResult("RUN", 5, "GAIN")
+        t = game._calculate_time(run_result)
+        assert t == 20, f"No-huddle run should use 20s, got {t}"
+
+    def test_no_huddle_does_not_halve_incomplete_time(self):
+        """No-huddle does NOT halve clock-stopping play time (incomplete stays 10)."""
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        inc_result = PlayResult("PASS", 0, "INCOMPLETE")
+        t = game._calculate_time(inc_result)
+        assert t == 10, f"No-huddle incomplete should still use 10s, got {t}"
+
+    def test_no_huddle_auto_rescinded_on_clock_stop(self):
+        """No-huddle is auto-rescinded when a clock-stopping play occurs."""
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        assert game._no_huddle is True
+        inc_result = PlayResult("PASS", 0, "INCOMPLETE")
+        game._calculate_time(inc_result)  # triggers auto-rescind
+        assert game._no_huddle is False, "No-huddle should be rescinded after incomplete pass"
+
+    def test_no_huddle_not_rescinded_on_run(self):
+        """No-huddle is NOT rescinded after a non-stopping play."""
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        run_result = PlayResult("RUN", 5, "GAIN")
+        game._calculate_time(run_result)
+        assert game._no_huddle is True, "No-huddle should remain active after a run"
+
+    def test_no_huddle_rescinded_on_possession_change(self):
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        game._change_possession(25)
+        assert game._no_huddle is False
+
+    def test_no_huddle_not_applied_to_kicking_plays(self):
+        """No-huddle should not halve time for punt/FG/kickoff."""
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        punt_result = PlayResult("PUNT", 40, "GAIN")
+        t = game._calculate_time(punt_result)
+        assert t == game.TIME_PUNT_KICK, f"Punt in no-huddle should use normal {game.TIME_PUNT_KICK}s"
+
+    def test_no_huddle_auto_rescinded_on_oob(self):
+        """Out-of-bounds play (clock-stopping) also auto-rescinds no-huddle."""
+        game = self._make_game()
+        game.declare_no_huddle_offense()
+        oob_result = PlayResult("RUN", 5, "GAIN")
+        oob_result.out_of_bounds = True
+        game._calculate_time(oob_result)
+        assert game._no_huddle is False, "No-huddle should be rescinded after OOB"
+
 
 class TestPlayerStatsTracking:
     """Test that player stats are tracked during play."""

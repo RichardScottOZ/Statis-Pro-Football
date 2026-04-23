@@ -177,6 +177,8 @@ class Game:
         self._last_play_time: int = 0
         # 5E: Manual two-minute offense declaration
         self._two_minute_declared: bool = False
+        # 5E: No-Huddle offense flag
+        self._no_huddle: bool = False
         # 5E: Big play defense state per team
         self._big_play_defense = {"home": BigPlayDefense(), "away": BigPlayDefense()}
         self._current_play_personnel_note: Optional[str] = None
@@ -1342,6 +1344,13 @@ class Game:
         # Also reset consecutive-play counters since it's a new possession
         self.state.last_ball_carrier = None
         self.state.prev_ball_carrier = None
+        # 5E: two-minute and no-huddle are rescinded on possession change
+        if self._two_minute_declared:
+            self._two_minute_declared = False
+            self.state.play_log.append("  ⏱️ Two-minute offense rescinded (possession changed).")
+        if self._no_huddle:
+            self._no_huddle = False
+            self.state.play_log.append("  🏃 No-huddle offense rescinded (possession changed).")
 
     def _score_touchdown(self) -> None:
         if self.state.possession == "home":
@@ -1878,7 +1887,13 @@ class Game:
           * Field goal attempt           → 5 seconds
           * Touchback, XP, movement pen  → 0 seconds
           * Kneel                        → 40 seconds
+
+        Two-Minute Offense: all play times halved (min 1 s).
+        No-Huddle Offense: only non-clock-stopping play times halved;
+          clock-stopping plays use normal time and auto-rescind no-huddle.
         """
+        is_kicking = result.play_type in ("PUNT", "KICKOFF", "FG")
+
         if result.result in ("TOUCHBACK", "XP_GOOD", "XP_MISS"):
             time = self.TIME_ZERO
         elif result.play_type == "PUNT" or result.play_type == "KICKOFF":
@@ -1899,6 +1914,22 @@ class Game:
             time = self.TIME_CLOCK_STOP
         else:
             time = self.TIME_STANDARD_PLAY
+
+        # ── Two-Minute / No-Huddle time halving ───────────────────────
+        clock_stopping = (time <= self.TIME_CLOCK_STOP and time > self.TIME_ZERO)
+        if not is_kicking:
+            if self._is_two_minute_offense():
+                # Two-minute halves ALL play times (incl. clock-stopping)
+                if time > self.TIME_ZERO:
+                    time = max(1, time // 2)
+            elif self._no_huddle:
+                # No-huddle only halves non-clock-stopping play times
+                if not clock_stopping and time > self.TIME_ZERO:
+                    time = max(1, time // 2)
+                elif clock_stopping:
+                    # Clock-stopping play in no-huddle → auto-rescind
+                    self._rescind_no_huddle_offense(reason="clock stopped")
+
         # Track for timeout restriction rule
         self._last_play_time = time
         return time
@@ -2564,6 +2595,8 @@ class Game:
                     # Immediately swap injured player out of the starter slot so
                     # the formation grid and personnel views reflect the change.
                     self._immediate_injury_swap(injured_player)
+                    # 5E: injury auto-rescinds no-huddle offense
+                    self._rescind_no_huddle_offense(reason="injury")
 
         # ── 5E Z-card penalty resolution ─────────────────────────────
         if result.z_card_event and result.z_card_event.get("type") == "PENALTY":
@@ -3373,3 +3406,35 @@ class Game:
         """Manually declare two-minute offense mode."""
         self._two_minute_declared = True
         self.state.play_log.append("⏱️ Two-minute offense declared!")
+
+    def rescind_two_minute_offense(self):
+        """Voluntarily rescind two-minute offense mode."""
+        self._two_minute_declared = False
+        self.state.play_log.append("⏱️ Two-minute offense rescinded.")
+
+    # ── No-Huddle Offense ───────────────────────────────────────────────
+
+    def declare_no_huddle_offense(self):
+        """Declare no-huddle offense.
+
+        5E rules: May be used at any time.  Halves time for non-clock-stopping
+        plays only.  Auto-rescinded when the clock stops, an injury occurs, a
+        substitution is made at the end of a play, or possession changes.
+        Never in effect on punt or kicking plays.
+        """
+        self._no_huddle = True
+        self.state.play_log.append("🏃 No-huddle offense declared!")
+
+    def _rescind_no_huddle_offense(self, reason: str = ""):
+        """Internal helper — clear no-huddle flag and log the reason."""
+        if self._no_huddle:
+            self._no_huddle = False
+            msg = "  🏃 No-huddle offense rescinded"
+            if reason:
+                msg += f" ({reason})"
+            msg += "."
+            self.state.play_log.append(msg)
+
+    def rescind_no_huddle_offense(self):
+        """Voluntarily rescind no-huddle offense."""
+        self._rescind_no_huddle_offense(reason="voluntarily rescinded")
