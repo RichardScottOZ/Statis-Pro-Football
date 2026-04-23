@@ -33,7 +33,7 @@ resolution via effective_* helpers from ``fac_distributions``.
 """
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from .player_card import PlayerCard, RECEIVER_LETTERS
 from .fac_deck import FACCard, FACDeck
 from .charts import Charts
@@ -73,6 +73,7 @@ class PlayResult:
     interception_point: Optional[int] = None    # Yard line where INT occurred
     personnel_note: Optional[str] = None        # Auto-substitution / availability note
     box_assignments: Optional[Dict[str, str]] = None  # Box letter → player name for this play
+    sack_by: Optional[List[Tuple[str, float]]] = None  # [(player_name, credit)] — 1.0 full, 0.5 half
     debug_log: List[str] = field(default_factory=list)  # Step-by-step resolution log
 
 
@@ -1039,7 +1040,88 @@ class PlayResolver:
         """Blitzing players have a pass rush value of 2 regardless of printed value."""
         return 2
 
-    # ── Rule 9: Empty Box Completion Modifier ────────────────────────
+    # ── Sack Credit Assignment ────────────────────────────────────────
+
+    @staticmethod
+    def assign_sack_credit(
+        defenders_by_box: Optional[Dict[str, "PlayerCard"]],
+        blitzer_names: Optional[List[str]],
+    ) -> List[Tuple[str, float]]:
+        """Assign sack credit to the defender(s) most responsible for the sack.
+
+        Algorithm (house rule):
+          1. Build a weighted candidate pool:
+             - Every occupied Row 1 box (A-E, the pass-rush line) contributes its
+               player with weight = player's ``pass_rush_rating``.  A player with a
+               high pass-rush rating is therefore more likely to be put on the LINE
+               (pass_rush_rating > 2 makes it worthwhile) and to receive credit.
+             - Each blitzing player (from ``blitzer_names``) contributes weight = 2
+               (the fixed blitz PR value per 5E rules).
+          2. Use ``random.choices`` to draw one box from the weighted pool.
+          3. Full sack (1.0) when one player occupies the drawn box; half sack
+             (0.5 each) when two players share it (possible per 5E rules where
+             Row 1 allows 0-2 per box).
+          4. If no candidates can be identified, return an empty list (sack credit
+             unassigned — QB's passer stat already records the sack suffered).
+        """
+        if not defenders_by_box:
+            return []
+
+        # Invert defenders_by_box so we can look up a player's box by name
+        name_to_box: Dict[str, str] = {
+            card.player_name: box
+            for box, card in defenders_by_box.items()
+        }
+
+        # Build {box: [player_card, ...]} supporting (future) two-player boxes
+        box_players: Dict[str, List["PlayerCard"]] = {}
+        # Row 1 (pass-rush line): boxes A-E
+        row1_boxes = ('A', 'B', 'C', 'D', 'E')
+        for box in row1_boxes:
+            card = defenders_by_box.get(box)
+            if card:
+                box_players.setdefault(box, []).append(card)
+
+        # Blitzers: each contributing to their own box with weight 2
+        if blitzer_names:
+            # Build a name→card map so we retrieve the blitzer's own card, not
+            # whoever else might occupy the same box (avoids misattribution).
+            name_to_card: Dict[str, "PlayerCard"] = {
+                card.player_name: card
+                for card in defenders_by_box.values()
+            }
+            for bname in blitzer_names:
+                box = name_to_box.get(bname)
+                blitzer_card = name_to_card.get(bname)
+                if box and box not in row1_boxes and blitzer_card:
+                    # Blitzer from Row 2/3: add their card to the pool
+                    box_players.setdefault(box, []).append(blitzer_card)
+
+        if not box_players:
+            return []
+
+        # Weights: Row 1 players use pass_rush_rating; blitzers use 2
+        boxes = list(box_players.keys())
+        weights: List[float] = []
+        for box in boxes:
+            if box in row1_boxes:
+                # Weight = sum of pass_rush_rating of players in this box
+                w = sum(getattr(p, 'pass_rush_rating', 1) for p in box_players[box])
+            else:
+                # Blitz box: fixed weight of 2 per blitzing player
+                w = 2.0 * len(box_players[box])
+            weights.append(max(w, 1))  # Minimum weight of 1 to avoid zero-weight
+
+        drawn_box = random.choices(boxes, weights=weights, k=1)[0]
+        players_in_box = box_players[drawn_box]
+
+        if len(players_in_box) == 1:
+            return [(players_in_box[0].player_name, 1.0)]
+        else:
+            # Two players share the box → half sack each
+            return [(p.player_name, 0.5) for p in players_in_box[:2]]
+
+
 
     @staticmethod
     def get_empty_box_completion_modifier(defender_assigned: bool) -> int:
@@ -1791,12 +1873,26 @@ class PlayResolver:
                 if pr_result == "SACK":
                     loss = -(pn // 3 + 1)
                     loss = max(loss, -8)
+                    sack_credits = self.assign_sack_credit(defenders_by_box, blitzer_names)
+                    if sack_credits:
+                        sacker_parts = [
+                            f"{name} ({credit:.1f})" if credit < 1.0 else name
+                            for name, credit in sack_credits
+                        ]
+                        sacker_str = ", ".join(sacker_parts)
+                        log.append(f"[SACK] Credit: {sacker_str}")
+                        desc = (f"{qb.player_name} sacked by {sacker_str}! "
+                                f"{abs(loss)} yard loss.")
+                    else:
+                        desc = (f"{qb.player_name} sacked on pass rush! "
+                                f"{abs(loss)} yard loss.")
                     r = PlayResult(
                         play_type="PASS", yards_gained=loss,
                         result="SACK",
-                        description=f"{qb.player_name} sacked on pass rush! {abs(loss)} yard loss.",
+                        description=desc,
                         passer=qb.player_name, z_card_event=z_event,
                         pass_number_used=pn,
+                        sack_by=sack_credits or None,
                     )
                     r.debug_log = log
                     return r
@@ -1844,11 +1940,25 @@ class PlayResolver:
             else:
                 loss = random.choice([-3, -4, -5, -6])
                 log.append(f"[P.RUSH] No QB pass_rush ranges, default sack {loss} yards")
+                sack_credits = self.assign_sack_credit(defenders_by_box, blitzer_names)
+                if sack_credits:
+                    sacker_parts = [
+                        f"{name} ({credit:.1f})" if credit < 1.0 else name
+                        for name, credit in sack_credits
+                    ]
+                    sacker_str = ", ".join(sacker_parts)
+                    log.append(f"[SACK] Credit: {sacker_str}")
+                    desc = (f"{qb.player_name} sacked by {sacker_str}! "
+                            f"{abs(loss)} yard loss.")
+                else:
+                    desc = (f"{qb.player_name} sacked on pass rush! "
+                            f"{abs(loss)} yard loss.")
                 r = PlayResult(
                     play_type="PASS", yards_gained=loss,
                     result="SACK",
-                    description=f"{qb.player_name} sacked on pass rush! {abs(loss)} yard loss.",
+                    description=desc,
                     passer=qb.player_name, z_card_event=z_event,
+                    sack_by=sack_credits or None,
                 )
                 r.debug_log = log
                 return r

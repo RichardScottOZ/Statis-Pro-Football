@@ -323,11 +323,36 @@ The following rules are implemented as optional extensions beyond the core 5th-e
   chance per pass play; rises to ~50 % on 3rd/4th & long or when protecting a late lead).
   All blocking-back decisions are logged in the play log.
 
+- **Sack Credit Assignment** — When a sack results from a Pass Rush, individual credit is
+  assigned to the defender most responsible using a weighted random draw:
+  - **Pass-rush line** (Row 1, boxes A-E): each occupied DL box is a candidate weighted by
+    the player's `pass_rush_rating`.  Players with high pass-rush ratings (> 2) are
+    therefore the strongest contributors and are typically placed on the line.
+  - **Blitzers** (Row 2/3 boxes): any blitzing player is also a candidate with fixed weight 2
+    (their 5E blitz PR value).
+  - `random.choices` draws one box from the weighted pool.  If two players occupy that
+    box, each receives a **half sack** (0.5); otherwise the sole occupant gets a **full sack**.
+  - The sacker's name appears in the play log (e.g. "Josh Allen sacked by Myles Garrett! 6 yard loss.")
+    and in the end-of-game SACKS section of the boxscore.
+
 ## Future Rules / Potential Extensions
 
 The following rules do not appear in the 5th-edition rulebook but may be added as optional house rules in a future release:
 
 - ~~**Shotgun Formation (Offense)**~~ — Now implemented as an advanced rule (see above).
+
+- ~~**Sack Credit Assignment**~~ — Now implemented as an advanced rule (see above).
+
+- **Tackle Credit Assignment** — A similar weighted-draw system (mirroring sack credit)
+  could assign individual tackle credit (full or half) to the defender who made the stop
+  on run plays and short passes.  The candidate pool would be drawn from the coverage/run-stop
+  boxes relevant to the play direction, with weights proportional to `tackle_rating`.
+  Tackle totals would appear in the boxscore alongside sacks.
+
+- **Fumble Recovery Assignment** — When a fumble occurs, a separate weighted draw could
+  assign recovery credit to a specific player on either team (recoveries are team-level
+  today).  The pool would include nearby defenders/blockers; the recovered-by player name
+  would appear in the play log and in a fumble-recovery boxscore section.
 
 ## License
 

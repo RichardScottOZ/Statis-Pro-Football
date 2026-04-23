@@ -1307,6 +1307,14 @@ class Game:
             if result.is_touchdown:
                 stats[name]["receiving_tds"] += 1
 
+        # Track sack credit for defensive players
+        if result.result == "SACK" and result.sack_by:
+            for defender_name, credit in result.sack_by:
+                if defender_name not in stats:
+                    stats[defender_name] = {}
+                stats[defender_name].setdefault("sacks_given", 0.0)
+                stats[defender_name]["sacks_given"] += credit
+
     def _advance_down(self, yards: int) -> bool:
         """Advance down counter. Returns True if first down achieved."""
         self.state.yard_line = min(99, self.state.yard_line + yards)
@@ -3155,6 +3163,21 @@ class Game:
                 yds = s.get("receiving_yards", 0)
                 td = s.get("receiving_tds", 0)
                 lines.append(f"  {name:<24s} {rec:>3d} {yds:>5d} {td:>3d}")
+
+        # Defensive sacks by player
+        sackers = [
+            (name, s) for name, s in stats.items()
+            if s.get("sacks_given", 0) > 0
+        ]
+        if sackers:
+            lines.append("")
+            lines.append("SACKS                           No")
+            lines.append("-" * 50)
+            for name, s in sorted(sackers, key=lambda x: -x[1].get("sacks_given", 0)):
+                sk = s.get("sacks_given", 0)
+                # Display as integer when whole number, otherwise one decimal place
+                sk_str = f"{sk:.0f}" if sk == int(sk) else f"{sk:.1f}"
+                lines.append(f"  {name:<30s} {sk_str:>4s}")
 
         # Fumbles lost — tracked at team level
         if any(v > 0 for v in self.state.turnovers.values()):
