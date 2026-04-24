@@ -3014,13 +3014,33 @@ class Game:
                     dl_pass_rush_sum += 2  # Blitzing player PR = 2
                     blitzing_names.append(defenders_by_box[box_letter].player_name)
 
-        # Determine which defender (if any) moved for double coverage.
-        # If double coverage is active, the FS (box M) typically leaves
-        # their assignment to double-cover the targeted receiver.
+        # Determine which defender (if any) moved for double/triple coverage.
+        # Priority: Box L extra DB moved to cover (if present), otherwise FS
+        # in Box M is the default double-teamer.
+        # For triple coverage, find a second extra DB (not assigned to any
+        # standard coverage box) as the "third DB" who provides the third layer.
         double_coverage_defender_box: Optional[str] = None
-        if defensive_strategy in ("DOUBLE_COVERAGE", "ALT_DOUBLE_COVERAGE"):
-            # The FS (box M) is the default double-coverage defender
-            double_coverage_defender_box = 'M'
+        triple_coverage_defender_name: Optional[str] = None
+        if defensive_strategy in ("DOUBLE_COVERAGE", "ALT_DOUBLE_COVERAGE",
+                                  "TRIPLE_COVERAGE"):
+            # If Box L has an extra DB, they're the one who moved to cover;
+            # otherwise the FS (Box M) is the default double-teamer.
+            if 'L' in defenders_by_box:
+                double_coverage_defender_box = 'L'
+            else:
+                double_coverage_defender_box = 'M'
+
+        if defensive_strategy == "TRIPLE_COVERAGE":
+            # Find the "third DB" — a second extra DB not assigned to any box.
+            # DBs in the standard coverage boxes (K, L, M, N, O) are already
+            # accounted for; any DB outside those boxes is the triple-teamer.
+            assigned_names = {d.player_name for d in defenders_by_box.values()}
+            db_positions = {'CB', 'S', 'SS', 'FS', 'DB'}
+            for d in defenders:
+                if (getattr(d, 'position', '') in db_positions
+                        and d.player_name not in assigned_names):
+                    triple_coverage_defender_name = d.player_name
+                    break
 
         if play_call.play_type == "LONG_PASS":
             pass_type = "LONG"
@@ -3058,6 +3078,7 @@ class Game:
                 double_coverage_defender_box=double_coverage_defender_box,
                 blitzer_names=blitzing_names or None,
                 endurance_modifier=endurance_comp_penalty,
+                triple_coverage_defender_name=triple_coverage_defender_name,
             )
             result.defense_formation = def_formation
             return result

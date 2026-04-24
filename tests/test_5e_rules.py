@@ -2951,3 +2951,128 @@ class TestPassDefensedStat:
             f"Debug: {result.debug_log}"
         )
 
+
+    def test_double_coverage_from_box_l_credits_box_l_defender(self):
+        """When Box L has an extra DB and they double-cover, Box L gets PD credit.
+
+        double_coverage_defender_box='L' tells the resolver that the Box L extra
+        DB (not the FS) is the double-teamer.
+
+        PN arithmetic: com_max=32, raw PN=29, coverage_penalty=7 → adj PN=36 > 32.
+          pn_without_coverage = 36 - 7 = 29 ≤ 32 → COM → Box L defender credited.
+        """
+        resolver = PlayResolver()
+        qb = self._make_qb(com_max=32)
+        recs = self._make_receivers(5)
+        # Enough defenders for double coverage (-7)
+        defenders, defenders_by_box = self._make_coverage_defenders(
+            n_row2=3, n_row3=1, add_o_box_defender=True
+        )
+        # Add an extra DB in Box L (the double-teamer)
+        from engine.player_card import PlayerCard
+        extra_db = PlayerCard("Nickel CB", "DAL", "CB", 35, "B")
+        extra_db.pass_defense_rating = 0
+        defenders_by_box["L"] = extra_db
+
+        fac = self._make_fac_card(pn=29)
+        deck = FACDeck()
+        import random; random.seed(42)
+        result = resolver.resolve_pass_5e(
+            fac, deck, qb, recs[0], recs,
+            pass_type="SHORT",
+            defensive_strategy="DOUBLE_COVERAGE",
+            defenders=defenders,
+            defenders_by_box=defenders_by_box,
+            double_coverage_defender_box='L',   # Box L extra DB is the double-teamer
+        )
+        assert result.result == "INCOMPLETE", (
+            f"Expected INCOMPLETE, got {result.result}\nDebug: {result.debug_log}"
+        )
+        assert result.pass_defensed_by == "Nickel CB", (
+            f"Expected 'Nickel CB' (Box L extra DB), got {result.pass_defensed_by!r}\n"
+            f"Debug: {result.debug_log}"
+        )
+        assert "pass defensed by Nickel CB" in result.description
+
+    def test_triple_coverage_third_db_gets_pd_credit(self):
+        """Triple coverage with triple_coverage_defender_name → third DB gets PD.
+
+        When triple_coverage_defender_name is provided and triple coverage (-15)
+        was the decisive factor, the third DB (not the double-teamer) is credited.
+
+        PN arithmetic: com_max=32, raw PN=22, coverage_penalty=15 → adj PN=37.
+          37 > 32 → INC.
+          pn_without_coverage = 37 - 15 = 22 ≤ 32 → COM → third DB credited.
+        """
+        resolver = PlayResolver()
+        qb = self._make_qb(com_max=32)
+        recs = self._make_receivers(5)
+        # 10 defenders: row2=3>=2, row3=6>=6 → resolve_triple_coverage → -15
+        defenders, defenders_by_box = self._make_coverage_defenders(
+            n_row2=3, n_row3=6, add_o_box_defender=True
+        )
+        # Add Box L extra DB (double-teamer)
+        from engine.player_card import PlayerCard
+        extra_db1 = PlayerCard("Nickel CB", "DAL", "CB", 35, "B")
+        extra_db1.pass_defense_rating = 0
+        defenders_by_box["L"] = extra_db1
+
+        fac = self._make_fac_card(pn=22)   # raw 22 ≤ 32 → COM without coverage
+        deck = FACDeck()
+        import random; random.seed(42)
+        result = resolver.resolve_pass_5e(
+            fac, deck, qb, recs[0], recs,
+            pass_type="SHORT",
+            defensive_strategy="TRIPLE_COVERAGE",
+            defenders=defenders,
+            defenders_by_box=defenders_by_box,
+            double_coverage_defender_box='L',       # Box L = double-teamer
+            triple_coverage_defender_name="Dime DB",  # second extra DB (triple-teamer)
+        )
+        assert result.result == "INCOMPLETE", (
+            f"Expected INCOMPLETE, got {result.result}\nDebug: {result.debug_log}"
+        )
+        assert result.pass_defensed_by == "Dime DB", (
+            f"Expected 'Dime DB' (third DB / triple-teamer), "
+            f"got {result.pass_defensed_by!r}\nDebug: {result.debug_log}"
+        )
+        assert "pass defensed by Dime DB" in result.description
+
+    def test_triple_coverage_falls_back_to_double_teamer_when_no_third_db(self):
+        """Triple coverage (-15) with no triple_coverage_defender_name → falls
+        back to crediting the double-teamer (double_coverage_defender_box).
+
+        This covers the case where only one extra DB exists (no second Box L DB).
+        PN arithmetic: com_max=32, raw PN=25, coverage_penalty=15 → adj PN=40.
+          pn_without_coverage = 25 ≤ 32 → COM → double-teamer (box L) credited.
+        """
+        resolver = PlayResolver()
+        qb = self._make_qb(com_max=32)
+        recs = self._make_receivers(5)
+        defenders, defenders_by_box = self._make_coverage_defenders(
+            n_row2=3, n_row3=6, add_o_box_defender=True
+        )
+        from engine.player_card import PlayerCard
+        extra_db = PlayerCard("Nickel CB", "DAL", "CB", 35, "B")
+        extra_db.pass_defense_rating = 0
+        defenders_by_box["L"] = extra_db
+
+        fac = self._make_fac_card(pn=25)
+        deck = FACDeck()
+        import random; random.seed(42)
+        result = resolver.resolve_pass_5e(
+            fac, deck, qb, recs[0], recs,
+            pass_type="SHORT",
+            defensive_strategy="TRIPLE_COVERAGE",
+            defenders=defenders,
+            defenders_by_box=defenders_by_box,
+            double_coverage_defender_box='L',
+            # triple_coverage_defender_name omitted → falls back to double-teamer
+        )
+        assert result.result == "INCOMPLETE", (
+            f"Expected INCOMPLETE, got {result.result}\nDebug: {result.debug_log}"
+        )
+        assert result.pass_defensed_by == "Nickel CB", (
+            f"Expected 'Nickel CB' (fallback to double-teamer), "
+            f"got {result.pass_defensed_by!r}\nDebug: {result.debug_log}"
+        )
