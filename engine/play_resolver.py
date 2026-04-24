@@ -1299,8 +1299,13 @@ class PlayResolver:
              get the tackle.  One box + one player → full tackle (1.0).
              One box + two players → half each (0.5).
              Two boxes each with one player → half each (0.5).
-          2. **RN table lookup** (when *rn* is provided, 1–12) — the RN is
-             used to look up the primary tackler box(es) from ``_RN_TACKLE_TABLE``:
+          2. **RN table lookup** — a **fresh** run number is drawn from *deck*
+             (or ``random.randint(1, 12)`` when no deck is available) to look
+             up the primary tackler box(es) from ``_RN_TACKLE_TABLE``.  This
+             draw is intentionally independent of the play's own FAC card so
+             tackle credit is not correlated with the play result.
+             *rn* may be supplied explicitly to override the draw (useful for
+             unit tests).
              • Single box → occupant(s) of that box get credit.
              • Two boxes  → flip FAC PN (or random 1–48): 1–24 first, 25–48 second.
              • Three boxes → PN: 1–16 first, 17–32 second, 33–48 third.
@@ -1312,8 +1317,9 @@ class PlayResolver:
              • Pass play → covering defender, or weighted-random fallback.
              If 2 or more players share the resolved box → half each
              (requires *defenders_by_box_multi*; otherwise assumes 1 per box).
-          3. **Weighted-random fallback** — used when *rn* is None or the RN
-             table produces no result.  Weights vary by play type.
+          3. **Weighted-random fallback** — used only when the RN table
+             produces no result (unknown play type, no defenders, etc.).
+             Weights vary by play type.
           4. If no defenders are available, return an empty list.
         """
         if not defenders_by_box:
@@ -1334,10 +1340,24 @@ class PlayResolver:
         weight_key = PlayResolver._normalise_tackle_weight_key(play_type)
         is_pass = weight_key in ("QUICK_PASS", "SHORT_PASS", "LONG_PASS", "SCREEN_PASS")
 
-        # --- Step 2: RN table lookup ---
-        if rn is not None and 1 <= rn <= 12 and weight_key in PlayResolver._RN_TACKLE_TABLE:
+        # --- Step 2: RN table lookup with a fresh, independent RN draw ---
+        if weight_key in PlayResolver._RN_TACKLE_TABLE:
+            # Draw a NEW run number specifically for tackle resolution.
+            # This must be independent of the play's own FAC card RN so that
+            # tackle credit is not tied to the yards/result of the play.
+            if rn is not None and 1 <= rn <= 12:
+                # Explicit override — used by unit tests.
+                tackle_rn = rn
+            elif deck is not None:
+                tackle_card = deck.draw()
+                tackle_rn = tackle_card.run_num_int or random.randint(1, 12)
+                # Clamp to valid range (Z cards produce None → already handled above)
+                tackle_rn = max(1, min(12, tackle_rn))
+            else:
+                tackle_rn = random.randint(1, 12)
+
             table = PlayResolver._RN_TACKLE_TABLE[weight_key]
-            entry = table[rn - 1]
+            entry = table[tackle_rn - 1]
 
             # Resolve multi-box entry via a PN flip
             if isinstance(entry, list):
@@ -2847,7 +2867,7 @@ class PlayResolver:
         tackle_credits = self.assign_tackle_credit(
             defenders_by_box, pass_type,
             covering_defender_box=covering_defender_box,
-            rn=run_num, deck=deck,
+            deck=deck,
         )
         if tackle_credits:
             log.append(f"[TACKLE] Credit: {', '.join(f'{n}({c:.1f})' for n,c in tackle_credits)}")
@@ -3352,7 +3372,7 @@ class PlayResolver:
                 desc = f"{rusher.player_name} runs {play_direction} for {yards} yards, out of bounds"
                 tackle_credits = self.assign_tackle_credit(
                     defenders_by_box, play_direction, box_letters or None,
-                    rn=used_run_num, deck=deck,
+                    deck=deck,
                 )
                 if tackle_credits:
                     log.append(f"[TACKLE] Credit: {', '.join(f'{n}({c:.1f})' for n,c in tackle_credits)}")
@@ -3395,7 +3415,7 @@ class PlayResolver:
                 # Assign tackle and fumble recovery credit
                 tackle_credits = self.assign_tackle_credit(
                     defenders_by_box, play_direction, box_letters or None,
-                    rn=used_run_num, deck=deck,
+                    deck=deck,
                 )
                 if tackle_credits:
                     log.append(f"[TACKLE] Credit: {', '.join(f'{n}({c:.1f})' for n,c in tackle_credits)}")
@@ -3439,7 +3459,7 @@ class PlayResolver:
 
             tackle_credits = self.assign_tackle_credit(
                 defenders_by_box, play_direction, box_letters or None,
-                rn=used_run_num, deck=deck,
+                deck=deck,
             )
             if tackle_credits:
                 log.append(f"[TACKLE] Credit: {', '.join(f'{n}({c:.1f})' for n,c in tackle_credits)}")
@@ -3460,8 +3480,7 @@ class PlayResolver:
         yards = random.choices([-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8],
                                weights=[2, 3, 5, 8, 10, 12, 12, 10, 8, 5, 3])[0]
         log.append(f"[RUN] No rushing card data for {rusher.player_name}; fallback yards={yards}")
-        tackle_credits = self.assign_tackle_credit(defenders_by_box, play_direction,
-                                                     rn=used_run_num, deck=deck)
+        tackle_credits = self.assign_tackle_credit(defenders_by_box, play_direction, deck=deck)
         if tackle_credits:
             log.append(f"[TACKLE] Credit: {', '.join(f'{n}({c:.1f})' for n,c in tackle_credits)}")
         r = PlayResult(

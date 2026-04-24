@@ -32,14 +32,16 @@ If the blocking-matchup resolution identified a specific contested box (or boxes
 
 ### Step 2 — RN Table Lookup (primary random path)
 
-When no direct box assignment applies, the **Run Number (RN)** drawn from the FAC card (1–12) is used to look up the primary tackler box from the table below.
+When no direct box assignment applies, a **fresh Run Number (RN) is drawn from the deck** specifically for tackle resolution (1–12).  This draw is intentionally **independent** of the FAC card used to determine the play result (yards, outcome), so tackle credit is never tied to or correlated with the play's own RN.
+
+The fresh RN is looked up in the table below:
 
 - **Single box entry** — the occupant(s) of that box get the tackle.
 - **Two-box entry** (e.g. `K O`) — flip a FAC card for its PN:
   - PN 1–24 → first box; PN 25–48 → second box.
 - **Three-box entry** (e.g. `G H I`) — flip a FAC card for its PN:
   - PN 1–16 → first; PN 17–32 → second; PN 33–48 → third.
-- **DEF entry** — the covering defender's box is used (pass plays).
+- **DEF entry** — the covering defender's box is used (pass plays); M (FS) is the intended default for Quick RN 4.
 
 **If the resolved box is unoccupied:**
 - *Run play* — nearest occupied box by grid distance; among ties, the player with the highest tackle_rating wins; if still tied, half a tackle each.
@@ -49,7 +51,7 @@ When no direct box assignment applies, the **Run Number (RN)** drawn from the FA
 
 ### Step 3 — Play-Type Weighted Random Draw (Fallback)
 
-When no RN is available (Z-card draws, special teams, etc.), a **weighted random draw** over all occupied boxes is used.  Weights vary by play type (see tables below).
+Only used when the RN table produces no result (unknown play type, no defenders in resolved box and no valid fallback).  A **weighted random draw** over all occupied boxes is performed.  Weights vary by play type (see tables below).
 
 ---
 
