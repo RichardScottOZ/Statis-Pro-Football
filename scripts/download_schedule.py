@@ -144,8 +144,11 @@ def _fetch_via_csv(year: int) -> List[dict]:
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read().decode("utf-8")
-    except Exception as exc:  # noqa: BLE001
-        print(f"ERROR: Failed to download schedule CSV: {exc}", file=sys.stderr)
+    except urllib.error.HTTPError as exc:
+        print(f"ERROR: HTTP {exc.code} downloading schedule CSV: {exc.reason}", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as exc:
+        print(f"ERROR: Network error downloading schedule CSV: {exc.reason}", file=sys.stderr)
         sys.exit(1)
 
     reader = csv.DictReader(io.StringIO(raw))
