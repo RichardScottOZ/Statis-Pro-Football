@@ -149,6 +149,7 @@ class NewGameRequest(BaseModel):
     home_team: str
     away_team: str
     season: str = "2026_5e"
+    solitaire_home: bool = True
     solitaire_away: bool = True
     seed: Optional[int] = None  # Random seed for reproducible games
 
