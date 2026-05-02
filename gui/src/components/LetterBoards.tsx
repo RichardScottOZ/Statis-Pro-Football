@@ -499,12 +499,15 @@ function buildLinebackerSlots(players: PlayerBrief[], formation?: string): Defen
   // Pre-fill slot assignments in priority order: OLB first (they cover BK1/BK2 in pass
   // defense), then ILB, then MLB.  This ensures edge coverage assignments are populated
   // before the middle even when only 2 generic LBs are available.
-  const slotPlayers: (PlayerBrief | null)[] = Array(5).fill(null);
-  const fillOrder = [
-    ...labels.flatMap((l, i) => (active.has(i) && l === 'OLB') ? [i] : []),
-    ...labels.flatMap((l, i) => (active.has(i) && l === 'ILB') ? [i] : []),
-    ...labels.flatMap((l, i) => (active.has(i) && l === 'MLB') ? [i] : []),
-  ];
+  const slotPlayers: (PlayerBrief | null)[] = Array.from({ length: 5 }, () => null);
+  const olbIdxs: number[] = [], ilbIdxs: number[] = [], mlbIdxs: number[] = [];
+  labels.forEach((l, i) => {
+    if (!active.has(i)) return;
+    if (l === 'OLB') olbIdxs.push(i);
+    else if (l === 'ILB') ilbIdxs.push(i);
+    else mlbIdxs.push(i);
+  });
+  const fillOrder = [...olbIdxs, ...ilbIdxs, ...mlbIdxs];
   for (const index of fillOrder) {
     const label = labels[index];
     slotPlayers[index] =
