@@ -774,6 +774,8 @@ TEAM_PLAYERS = {
                  "pass_rush": 66, "coverage": 74, "run_stop": 82},
                 {"name": "Drue Tranquill",      "number": 23, "pos": "LB", "grade": "B",
                  "pass_rush": 62, "coverage": 70, "run_stop": 76},
+                {"name": "Leo Chenal",          "number": 54, "pos": "LB", "grade": "B",
+                 "pass_rush": 56, "coverage": 66, "run_stop": 80},
                 {"name": "Trent McDuffie",      "number": 22, "pos": "CB", "grade": "A",
                  "pass_rush": 46, "coverage": 88, "run_stop": 70},
                 {"name": "L'Jarius Sneed",      "number": 38, "pos": "CB", "grade": "B",

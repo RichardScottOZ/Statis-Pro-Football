@@ -4315,7 +4315,8 @@ class PlayResolver:
                     lb_idx += 1
 
         # Fill generic LBs using the standard formation box pattern:
-        # 3 LBs → F, H, J (4-3 pattern: edges + middle)
+        # 3 LBs → F, J, H (OLB edges first, then MLB center; ensures BK1/BK2 coverage)
+        # 2 LBs → F, J   (both OLB slots; BK1 + BK2 coverage preserved)
         # 4 LBs → F, G, I, J (3-4 pattern: edges + inner)
         # 5 or other → F, G, H, I, J (all five slots)
         all_lb_boxes = ['F', 'G', 'H', 'I', 'J']
@@ -4325,8 +4326,10 @@ class PlayResolver:
         if unassigned_lbs:
             n = len(unassigned_lbs)
             if n <= 3 and len(remaining_boxes) >= 3:
-                # 4-3 pattern: F (ROLB), H (MLB), J (LOLB)
-                pattern_boxes = [b for b in ['F', 'H', 'J'] if b not in assignments.values()]
+                # 4-3 pattern: fill OLB edges (F, J) before MLB center (H) so that
+                # BK1 and BK2 pass-defense coverage assignments are always occupied
+                # even when only 2 generic LBs are available.
+                pattern_boxes = [b for b in ['F', 'J', 'H'] if b not in assignments.values()]
                 # If pattern boxes cover all unassigned LBs, use them; otherwise
                 # fall back to all available boxes (e.g., some slots already taken).
                 if len(pattern_boxes) >= n:

@@ -496,18 +496,28 @@ function buildLinebackerSlots(players: PlayerBrief[], formation?: string): Defen
   const extras = players.filter(p => !['OLB', 'ILB', 'MLB'].includes(p.position.toUpperCase()));
   const active = new Set(activeByFamily[family]);
 
-  return labels.map((label, index) => {
-    if (!active.has(index)) {
-      return { key: `lb-${index}`, label, player: null };
-    }
-
-    const player =
+  // Pre-fill slot assignments in priority order: OLB first (they cover BK1/BK2 in pass
+  // defense), then ILB, then MLB.  This ensures edge coverage assignments are populated
+  // before the middle even when only 2 generic LBs are available.
+  const slotPlayers: (PlayerBrief | null)[] = Array(5).fill(null);
+  const fillOrder = [
+    ...labels.flatMap((l, i) => (active.has(i) && l === 'OLB') ? [i] : []),
+    ...labels.flatMap((l, i) => (active.has(i) && l === 'ILB') ? [i] : []),
+    ...labels.flatMap((l, i) => (active.has(i) && l === 'MLB') ? [i] : []),
+  ];
+  for (const index of fillOrder) {
+    const label = labels[index];
+    slotPlayers[index] =
       label === 'OLB' ? takeFirst([olbs, extras]) :
       label === 'ILB' ? takeFirst([ilbs, extras]) :
       takeFirst([mlbs, extras]);
+  }
 
-    return { key: `lb-${index}`, label, player };
-  });
+  return labels.map((label, index) => ({
+    key: `lb-${index}`,
+    label,
+    player: active.has(index) ? slotPlayers[index] : null,
+  }));
 }
 
 function buildSecondarySlots(players: PlayerBrief[], formation?: string): DefensiveSlot[] {
@@ -735,7 +745,7 @@ export function LetterBoards({ personnel, defenseFormation, selectedBallCarrier,
             {/* Row 2: Linebackers — reversed so J(LLB) is leftmost, F(RLB) is rightmost */}
             <div className="board-row board-row-label">
               <span className="row-label-text">LINEBACKERS</span>
-              <span className="row-letters">J(LLB) I(ILB) H(MLB) G(OLB) F(RLB)</span>
+              <span className="row-letters">J(LLB) I(ILB) H(MLB) G(ILB) F(RLB)</span>
             </div>
             <div className="board-row board-row-lb">
               {[...linebackerSlots].reverse().map(slot => (
